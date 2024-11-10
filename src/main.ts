@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent  } from 'obsidian';
 
 import { getFileValues } from 'src/utils/obsidianUtils';
 import { TagsManager } from 'src/tags/TagsManager';
@@ -15,6 +15,185 @@ interface MyPluginSettings {
 const DEFAULT_SETTINGS: MyPluginSettings = {
 	mySetting: 'default'
 }
+
+
+interface TopicData {
+    file: TFile;
+    subfolder: string;
+}
+
+class InputModal extends Modal {
+    private result: string;
+    private inputEl: TextComponent;
+    private resolvePromise: (value: string | null) => void;
+
+    constructor(app: App, private placeholder: string) {
+        super(app);
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.inputEl = new TextComponent(contentEl)
+            .setPlaceholder(this.placeholder);
+        
+        this.inputEl.inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                this.resolvePromise(this.inputEl.getValue());
+                this.close();
+            }
+            if (e.key === 'Escape') {
+                this.resolvePromise(null);
+                this.close();
+            }
+        });
+        
+        this.inputEl.inputEl.focus();
+    }
+
+    async getUserInput(): Promise<string | null> {
+        return new Promise((resolve) => {
+            this.resolvePromise = resolve;
+        });
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
+
+class TopicSelectorModal extends FuzzySuggestModal<TFile> {
+    constructor(app: App, private allowedClasses: string[]) {
+        super(app);
+        this.setPlaceholder(`Select a ${allowedClasses.join(" or ")} note`);
+    }
+
+    getItems(): TFile[] {
+        return this.app.vault.getMarkdownFiles().filter(file => {
+            if (file.path.startsWith('99_Organize/')) {
+                return false;
+            }
+
+            const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if (!frontmatter?.Class) return false;
+
+            const classMatch = this.allowedClasses.map(c => c.toLowerCase())
+                                 .includes(frontmatter.Class.toLowerCase());
+            
+            // For Topic class, require subfolder field
+            if (frontmatter.Class === 'Topic') {
+                return classMatch && !!frontmatter.subfolder;
+            }
+            
+            // For SubTopic, no additional requirements
+            return classMatch;
+        });
+    }
+
+    getItemText(file: TFile): string {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const frontmatter = cache?.frontmatter;
+        
+        if (frontmatter?.Class === 'SubTopic' && frontmatter.parent) {
+            const parentMatch = frontmatter.parent.match(/\[\[.*\|(.*?)\]\]/) || 
+                              frontmatter.parent.match(/\[\[(.*?)\]\]/);
+            const parentName = parentMatch ? parentMatch[1] : 'Unknown Parent';
+            return `${parentName} - ${file.basename}`;
+        }
+        
+        return file.basename;
+    }
+
+    onChooseItem(file: TFile): void {
+        console.log("Selected file:", file);
+    }
+}
+
+class ActionSelectorModal extends FuzzySuggestModal<string> {
+    constructor(private plugin: MyPlugin) {
+        super(plugin.app);
+        this.setPlaceholder("Select action");
+    }
+
+    getItems(): string[] {
+        return [
+            "New Topic",
+            "New Subtopic"
+        ];
+    }
+
+    getItemText(item: string): string {
+        return item;
+    }
+
+    async onChooseItem(action: string): Promise<void> {
+        switch (action) {
+            case "New Topic":
+                await this.handleNewTopic();
+                break;
+            case "New Subtopic":
+                await this.handleNewSubtopic();
+                break;
+        }
+    }
+
+    private async handleNewTopic() {
+        const inputModal = new InputModal(this.app, "Enter topic name");
+        inputModal.open();
+        const topicName = await inputModal.getUserInput();
+        
+        if (!topicName) return;
+
+        const template = await this.app.vault.getAbstractFileByPath("99_Organize/Templates/TopicTemplate.md");
+        if (!(template instanceof TFile)) {
+            new Notice("Topic template not found!");
+            return;
+        }
+
+        const templateContent = await this.app.vault.read(template);
+        await this.app.vault.create(`10_Topics/${topicName}.md`, templateContent);
+        new Notice(`Created new topic: ${topicName}`);
+    }
+
+    private async handleNewSubtopic() {
+        const topicSelector = new TopicSelectorModal(this.app, ['Topic', 'Subtopic']);
+        topicSelector.open();
+        
+        const selectedTopic = await new Promise<TopicData | null>((resolve) => {
+            topicSelector.onChooseItem = (file) => {
+                const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+                if (frontmatter?.subfolder) {
+                    resolve({ file, subfolder: frontmatter.subfolder });
+                } else {
+                    new Notice("Selected topic doesn't have a subfolder defined!");
+                    resolve(null);
+                }
+            };
+        });
+
+        if (!selectedTopic) return;
+
+        const inputModal = new InputModal(this.app, "Enter subtopic name");
+        inputModal.open();
+        const subtopicName = await inputModal.getUserInput();
+        
+        if (!subtopicName) return;
+
+        const template = await this.app.vault.getAbstractFileByPath("99_Organize/Templates/SubtopicTemplate.md");
+        if (!(template instanceof TFile)) {
+            new Notice("Subtopic template not found!");
+            return;
+        }
+
+        const templateContent = await this.app.vault.read(template);
+        await this.app.vault.create(
+            `${selectedTopic.subfolder}/${subtopicName}.md`, 
+            templateContent
+        );
+        new Notice(`Created new subtopic: ${subtopicName}`);
+    }
+}
+
 
 
 export default class MyPlugin extends Plugin {
@@ -35,6 +214,13 @@ export default class MyPlugin extends Plugin {
 	
 	async onload() {
 		await this.loadSettings();
+		this.addCommand({
+			id: 'create-new-content',
+			name: 'Create New Content',
+			callback: () => {
+				new ActionSelectorModal(this).open();
+			}
+		});
 
 		log.register(new ConsoleErrorLogger()).register(new GuiLogger(this));
 		this.tagsManager = new TagsManager(this.app);
@@ -43,7 +229,7 @@ export default class MyPlugin extends Plugin {
 		// This creates an icon in the left ribbon.
 		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
 			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+			new Notice('This is a changed notice');
 
 			const activeFile = this.app.workspace.getActiveFile();
 			if (activeFile) {
