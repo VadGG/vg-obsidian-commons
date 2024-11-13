@@ -151,7 +151,12 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
         }
 
         const templateContent = await this.app.vault.read(template);
-        await this.app.vault.create(`10_Topics/${topicName}.md`, templateContent);
+        const newFile = await this.app.vault.create(`10_Topics/${topicName}.md`, templateContent);
+
+		const leaf = this.app.workspace.getLeaf();
+		leaf.openFile(newFile);
+		this.app.workspace.revealLeaf(leaf);
+	
         new Notice(`Created new topic: ${topicName}`);
     }
 
@@ -224,7 +229,12 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 		await this.app.vault.adapter.mkdir(folderPath);
 
 		// Then create the file
-		await this.app.vault.create(subtopicPath, templateContent);
+		const newFile = await this.app.vault.create(subtopicPath, templateContent);
+
+		const leaf = this.app.workspace.getLeaf();
+		leaf.openFile(newFile);
+		this.app.workspace.revealLeaf(leaf);
+
 		new Notice(`Created new subtopic: ${subtopicName}`);
 	}
 	
@@ -268,7 +278,7 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 				if (!parentFile) {
 					parentFile = this.app.metadataCache.getFirstLinkpathDest(parentPath, file.path);
 				}
-				
+
 				// const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
 				console.log("---------------- parentFile: ");
 				console.log(parentFile);
