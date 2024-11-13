@@ -12,7 +12,6 @@ interface MyPluginSettings {
     topicFolder: string;
     subtopicFolderName: string;
 	selectorIgnoreFolderName: string;
-    defaultSetting: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -21,7 +20,6 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
     topicFolder: '10_Topics',
     subtopicFolderName: '00_Subtopics',
 	selectorIgnoreFolderName: '99_Organize',
-    defaultSetting: 'default',
 };
 
 
@@ -394,43 +392,38 @@ class SettingTab extends PluginSettingTab {
         super(app, plugin);
     }
 
-    display() {
-        const { containerEl } = this;
-        containerEl.empty();
-
-        containerEl.createEl('h2', { text: 'Settings for My Plugin' });
-
-        new Setting(containerEl)
-            .setName('Topic Template Path')
-            .setDesc('Path to the template for topics.')
-            .addText((text) =>
-                text
-                    .setPlaceholder('Example: 99_Organize/Templates/TopicTemplate.md')
-                    .setValue(this.plugin.settings.topicTemplatePath)
-                    .onChange(async (value) => {
-                        this.plugin.settings.topicTemplatePath = value;
-                        await this.plugin.saveSettings();
-                    })
-            );
-
-        new Setting(containerEl)
-            .setName('Selector Ignore Folder')
-            .setDesc('Folder to ignore when selecting topics')
+    createFolderSelector(
+        containerEl: HTMLElement,
+        name: string,
+        desc: string,
+        currentValue: string,
+        settingKey: keyof MyPluginSettings,
+        allowFiles: boolean = false
+    ) {
+        const setting = new Setting(containerEl)
+            .setName(name)
+            .setDesc(desc)
             .addSearch(search => {
-                let isModalOpen = false;  // Flag to prevent reopening
+                let isModalOpen = false;
+                
+                // Style the search container and input
+                const searchContainer = search.inputEl.parentElement;
+                if (searchContainer) {
+                    searchContainer.style.width = '100%';
+                }
+                search.inputEl.style.width = '100%';
                 
                 search
-                    .setPlaceholder("Example: 99_Organize")
-                    .setValue(this.plugin.settings.selectorIgnoreFolderName)
+                    .setPlaceholder(`Example: ${currentValue}`)
+                    .setValue(this.plugin.settings[settingKey])
                     .onChange(async (value) => {
-                        this.plugin.settings.selectorIgnoreFolderName = value;
+                        this.plugin.settings[settingKey] = value;
                         await this.plugin.saveSettings();
                     });
                 
-                let previousValue = this.plugin.settings.selectorIgnoreFolderName;
+                let previousValue = this.plugin.settings[settingKey];
                 
                 search.inputEl.addEventListener('focus', () => {
-                    // Prevent reopening if modal is already open
                     if (isModalOpen) {
                         search.inputEl.blur();
                         return;
@@ -439,13 +432,14 @@ class SettingTab extends PluginSettingTab {
                     isModalOpen = true;
                     const modal = new FolderSuggestModal(
                         this.app,
-                        (folder) => {
-                            if (folder) {
-                                search.setValue(folder.path);
-                                this.plugin.settings.selectorIgnoreFolderName = folder.path;
+                        allowFiles,
+                        (item) => {
+                            if (item) {
+                                const path = item instanceof TFolder ? item.path : item.path;
+                                search.setValue(path);
+                                this.plugin.settings[settingKey] = path;
                                 this.plugin.saveSettings();
                             }
-                            // Use setTimeout to ensure modal is fully closed before removing focus
                             setTimeout(() => {
                                 search.inputEl.blur();
                                 isModalOpen = false;
@@ -453,7 +447,7 @@ class SettingTab extends PluginSettingTab {
                         },
                         () => {
                             search.setValue(previousValue);
-                            this.plugin.settings.selectorIgnoreFolderName = previousValue;
+                            this.plugin.settings[settingKey] = previousValue;
                             this.plugin.saveSettings();
                             setTimeout(() => {
                                 search.inputEl.blur();
@@ -464,30 +458,143 @@ class SettingTab extends PluginSettingTab {
                     modal.open();
                 });
             });
+
+        // Style the setting container for better layout
+        setting.settingEl.style.display = 'grid';
+        setting.settingEl.style.gridTemplateColumns = '1fr';
+        setting.settingEl.style.gap = '6px';
+        
+        // Make the control container take full width
+        const controlEl = setting.settingEl.querySelector('.setting-item-control');
+        if (controlEl instanceof HTMLElement) {
+            controlEl.style.width = '100%';
+            controlEl.style.display = 'flex';
+            controlEl.style.justifyContent = 'flex-start';
+            controlEl.style.minWidth = '300px'; // Ensure minimum width
+        }
+
+        // Make the info container take full width
+        const infoEl = setting.settingEl.querySelector('.setting-item-info');
+        if (infoEl instanceof HTMLElement) {
+            infoEl.style.width = '100%';
+        }
+
+        return setting;
+    }
+
+    display() {
+        const { containerEl } = this;
+        containerEl.empty();
+
+        containerEl.createEl('h2', { text: 'Settings for My Plugin' });
+
+        // Topic Template Path Selector (allows files)
+        this.createFolderSelector(
+            containerEl,
+            'Topic Template Path',
+            'Path to the template for topics.',
+            '99_Organize/Templates/TopicTemplate.md',
+            'topicTemplatePath',
+            true
+        );
+
+        // Subtopic Template Path Selector (allows files)
+        this.createFolderSelector(
+            containerEl,
+            'Subtopic Template Path',
+            'Path to the template for subtopics.',
+            '99_Organize/Templates/SubtopicTemplate.md',
+            'subtopicTemplatePath',
+            true
+        );
+
+        // Topic Folder Selector
+        this.createFolderSelector(
+            containerEl,
+            'Topic Folder',
+            'Main folder for topics.',
+            '10_Topics',
+            'topicFolder',
+            false
+        );
+
+        // Subtopic Folder Name Selector
+        this.createFolderSelector(
+            containerEl,
+            'Subtopic Folder Name',
+            'Name of the subtopics folder.',
+            '00_Subtopics',
+            'subtopicFolderName',
+            false
+        );
+
+        // Selector Ignore Folder
+        this.createFolderSelector(
+            containerEl,
+            'Selector Ignore Folder',
+            'Folder to ignore when selecting topics.',
+            '99_Organize',
+            'selectorIgnoreFolderName',
+            false
+        );
+
+        // // Default Setting (regular text input)
+        // const defaultSetting = new Setting(containerEl)
+        //     .setName('Default Setting')
+        //     .setDesc('Default setting for the plugin.')
+        //     .addText(text => {
+        //         text.inputEl.style.width = '100%';
+        //         return text
+        //             .setPlaceholder('default')
+        //             .setValue(this.plugin.settings.defaultSetting)
+        //             .onChange(async (value) => {
+        //                 this.plugin.settings.defaultSetting = value;
+        //                 await this.plugin.saveSettings();
+        //             });
+        //     });
+
+        // // Style the default setting container
+        // defaultSetting.settingEl.style.display = 'grid';
+        // defaultSetting.settingEl.style.gridTemplateColumns = '1fr';
+        // defaultSetting.settingEl.style.gap = '6px';
+
+        // const defaultControlEl = defaultSetting.settingEl.querySelector('.setting-item-control');
+        // if (defaultControlEl instanceof HTMLElement) {
+        //     defaultControlEl.style.width = '100%';
+        //     defaultControlEl.style.display = 'flex';
+        //     defaultControlEl.style.justifyContent = 'flex-start';
+        //     defaultControlEl.style.minWidth = '300px';
+        // }
+
+
+
     }
 }
 
-class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
+class FolderSuggestModal extends FuzzySuggestModal<TFolder | TFile> {
     constructor(
-        app: App, 
-        private onSelect: (folder: TFolder | null) => void,
+        app: App,
+        private allowFiles: boolean,
+        private onSelect: (item: TFolder | TFile | null) => void,
         private onCancel: () => void
     ) {
         super(app);
-        this.setPlaceholder("Select folder to ignore");
+        this.setPlaceholder(allowFiles ? "Select folder or file" : "Select folder");
     }
 
-    getItems(): TFolder[] {
-        return this.app.vault.getAllLoadedFiles()
-            .filter((file): file is TFolder => file instanceof TFolder);
+    getItems(): (TFolder | TFile)[] {
+        const items = this.app.vault.getAllLoadedFiles();
+        return this.allowFiles 
+            ? items
+            : items.filter((file): file is TFolder => file instanceof TFolder);
     }
 
-    getItemText(folder: TFolder): string {
-        return folder.path;
+    getItemText(item: TFolder | TFile): string {
+        return item.path;
     }
 
-    onChooseItem(folder: TFolder): void {
-        this.onSelect(folder);
+    onChooseItem(item: TFolder | TFile): void {
+        this.onSelect(item);
         this.close();
     }
 
