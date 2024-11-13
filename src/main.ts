@@ -7,6 +7,8 @@ interface MyPluginSettings {
     topicFolder: string;
     subtopicFolderName: string;
 	selectorIgnoreFolderName: string;
+    howToTemplatePath: string;
+    howToFolderName: string;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -15,6 +17,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
     topicFolder: '10_Topics',
     subtopicFolderName: '00_Subtopics',
 	selectorIgnoreFolderName: '99_Organize',
+    howToTemplatePath: '99_Organize/Templates/HowToTemplate.md',
+    howToFolderName: '20_HowTos',
 };
 
 
@@ -81,12 +85,20 @@ class FileService {
     constructor(private app: App) {}
 
     async createFile(path: string, content: string): Promise<TFile> {
+        await this.ensureDirectory(path);
         return await this.app.vault.create(path, content);
     }
 
 	async openFile(file: TFile): Promise<void> {
         const leaf = this.app.workspace.getLeaf(false);
         await leaf.openFile(file);
+    }
+
+    async ensureDirectory(path: string): Promise<void> {
+        const dirs = path.split('/').slice(0, -1).join('/');
+        if (dirs && !(await this.app.vault.adapter.exists(dirs))) {
+            await this.app.vault.createFolder(dirs);
+        }
     }
 
     async revealInExplorer(file: TFile): Promise<void> {
@@ -188,7 +200,7 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
     }
 
     getItems(): string[] {
-        return ['New Topic', 'New Subtopic'];
+        return ['New Topic', 'New Subtopic', 'New How To'];
     }
 
     getItemText(action: string): string {
@@ -203,7 +215,66 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
             case 'New Subtopic':
                 await this.createSubtopic();
                 break;
+            case 'New How To':
+                await this.createHowTo();
+                break;
         }
+    }
+
+    private async createHowTo() {
+        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, ['Topic', 'SubTopic']);
+        topicSelector.open();
+
+        const selected = await new Promise<{file: TFile, parentPath: string}>((resolve) => {
+            topicSelector.onChooseItem = async (file) => {
+                const cache = this.plugin.app.metadataCache.getFileCache(file);
+                const frontmatter = cache?.frontmatter;
+                
+                if (frontmatter?.Class === 'Topic' && frontmatter.subfolder) {
+                    resolve({
+                        file,
+                        parentPath: `${frontmatter.subfolder}/${this.plugin.settings.howToFolderName}`
+                    });
+                } else if (frontmatter?.Class === 'SubTopic' && frontmatter.parent) {
+                    const parentMatch = frontmatter.parent.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
+                    if (parentMatch) {
+                        const parentFile = this.plugin.app.metadataCache.getFirstLinkpathDest(parentMatch[1], file.path);
+                        const parentFrontmatter = this.plugin.app.metadataCache.getFileCache(parentFile)?.frontmatter;
+                        if (parentFrontmatter?.subfolder) {
+                            resolve({
+                                file,
+                                parentPath: `${parentFrontmatter.subfolder}/${this.plugin.settings.howToFolderName}/${file.basename}`
+                            });
+                        }
+                    }
+                }
+            };
+        });
+
+        if (!selected) return;
+
+        const howToName = await this.getUserInput('Enter How To name');
+        if (!howToName) return;
+
+        const template = await this.templateService.loadTemplate(this.plugin.settings.howToTemplatePath);
+        if (!template) {
+            new Notice('How To template not found!');
+            return;
+        }
+
+        const templateContent = await this.plugin.app.vault.read(template);
+        const inheritedTags = await this.tagService.getInheritedTags(selected.file);
+        const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
+            parent: `[[${selected.file.path}|${selected.file.basename}]]`,
+            tags: inheritedTags,
+        });
+
+        const howToPath = `${selected.parentPath}/${howToName}.md`;
+        const newFile = await this.fileService.createFile(howToPath, updatedContent);
+        await this.fileService.revealInExplorer(newFile);
+        await this.fileService.openFile(newFile);
+
+        new Notice(`Created new How To: ${howToName}`);
     }
 
     private async getSelectedTopic(): Promise<TopicData | null> {
@@ -526,6 +597,25 @@ class SettingTab extends PluginSettingTab {
             'Folder to ignore when selecting topics.',
             '99_Organize',
             'selectorIgnoreFolderName',
+            false
+        );
+
+        this.createFolderSelector(
+            containerEl,
+            'How To Template Path',
+            'Path to the template for How To notes.',
+            '99_Organize/Templates/HowToTemplate.md',
+            'howToTemplatePath',
+            true
+        );
+
+        // How To Folder Name Selector
+        this.createFolderSelector(
+            containerEl,
+            'How To Folder Name',
+            'Name of the How To folder.',
+            '20_HowTos',
+            'howToFolderName',
             false
         );
 
