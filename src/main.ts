@@ -1,4 +1,6 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent  } from 'obsidian';
+import matter from 'gray-matter';
+
 
 import { getFileValues } from 'src/utils/obsidianUtils';
 // Remember to rename these classes and interfaces!
@@ -211,15 +213,27 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 		}
 	
 		// Get inherited tags from parent hierarchy
-		const inheritedTags = await this.getInheritedTags(selectedTopic.file);
-	
 		let templateContent = await this.app.vault.read(template);
+		const inheritedTags = await this.getInheritedTags(selectedTopic.file);
+		// const { data: frontmatter, content } = matter(templateContent);
 		
 		const parentLinkMd = `"[[${selectedTopic.file.path}|${selectedTopic.file.basename}]]"`;
+
+		const { data: frontmatter, content } = matter(templateContent);
+		console.log("00 -------- frontmatter:");
+		console.log(frontmatter);
+
 		// Replace template variables
-		templateContent = templateContent
-			.replace('{{parent}}', parentLinkMd)
-			.replace('{{tags}}', inheritedTags.join(', '));
+		// templateContent = templateContent
+		// 	.replace('{{parent}}', parentLinkMd)
+		// 	.replace('{{tags}}', inheritedTags.join(', '));
+
+		// Update frontmatter with new values
+		frontmatter.parent = `[[${selectedTopic.file.path}|${selectedTopic.file.basename}]]`;
+		frontmatter.itags = inheritedTags;
+		
+		// Reconstruct the file content with updated frontmatter
+		templateContent = matter.stringify(content, frontmatter);
 	
 		// Create new subtopic in correct location
 		const subtopicPath = `${selectedTopic.subfolder}/00_Subtopics/${subtopicName}.md`;
