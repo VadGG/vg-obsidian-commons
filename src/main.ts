@@ -86,12 +86,24 @@ class FileService {
 		const newFile = await this.app.vault.create(path, content);
 		const leaf = this.app.workspace.getLeaf();
 		leaf.openFile(newFile);
-		this.app.workspace.revealLeaf(leaf);
+		
+		this.revealInFileExplorer(newFile);
+
 		return newFile;
 	}
 
 	async ensureFolder(path: string): Promise<void> {
 		await this.app.vault.adapter.mkdir(path);
+	}
+	private async revealInFileExplorer(file: TFile): Promise<void> {
+		// This method will focus and expand folders in the file explorer
+		const explorerLeaf = this.app.workspace.getLeavesOfType("file-explorer")[0];
+
+		if (explorerLeaf) {
+			// Open the file in the explorer view and expand necessary folders
+			const explorerView = explorerLeaf.view as any;
+			await explorerView.revealInFolder(file, true);
+		}
 	}
 }
 
