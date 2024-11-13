@@ -318,6 +318,62 @@ export default class MyPlugin extends Plugin {
 			}
 		});
 
+        this.addCommand({
+            id: 'change-note-parent',
+            name: 'Change Note Parent',
+            callback: async () => {
+                const activeFile = this.app.workspace.getActiveFile();
+                if (!activeFile) {
+                    new Notice('No active file');
+                    return;
+                }
+        
+                // Select new parent topic
+                const topicSelector = new TopicSelectorModal(this.app, this.settings, ['Topic']);
+                topicSelector.open();
+        
+                const newParent = await new Promise<TFile | null>((resolve) => {
+                    topicSelector.onChooseItem = (file) => {
+                        resolve(file);
+                    };
+                });
+        
+                if (!newParent) return;
+        
+                // Read current file content
+                const content = await this.app.vault.read(activeFile);
+                const { data: frontmatter, content: fileContent } = matter(content);
+                
+                // Update parent link
+                frontmatter.parent = `[[${newParent.path}|${newParent.basename}]]`;
+                
+                // Get new inherited tags
+                const tagService = new TagService(this.app);
+                frontmatter.tags = await tagService.getInheritedTags(newParent);
+        
+                // Create updated content
+                const updatedContent = matter.stringify(fileContent, frontmatter);
+        
+                // If it's a subtopic, move it to the correct location
+                if (frontmatter.Class === 'SubTopic') {
+                    const parentFrontmatter = this.app.metadataCache.getFileCache(newParent)?.frontmatter;
+                    if (parentFrontmatter?.subfolder) {
+                        const newPath = `${parentFrontmatter.subfolder}/${this.settings.subtopicFolderName}/${activeFile.basename}.md`;
+                        // First move the file
+                        await this.app.fileManager.renameFile(activeFile, newPath);
+                        // Then get the new file reference and modify its content
+                        const movedFile = this.app.vault.getAbstractFileByPath(newPath);
+                        if (movedFile instanceof TFile) {
+                            await this.app.vault.modify(movedFile, updatedContent);
+                        }
+                    }
+                } else {
+                    await this.app.vault.modify(activeFile, updatedContent);
+                }
+                
+                new Notice('Parent changed successfully');
+            }
+        });
 
 	}
 }
