@@ -168,6 +168,8 @@ class BaseResourceCreator {
 
         new Notice(`Created new ${resourceType}: ${name}`);
     }
+
+
 }
 
 class ResourceManager extends BaseResourceCreator {
@@ -181,6 +183,20 @@ class ResourceManager extends BaseResourceCreator {
     ) {
         super(plugin, templateService, fileService, tagService);
         this.resourceTypes = new Map([
+            ['Topic', {
+                name: 'Topic',
+                folderName: plugin.settings.topicFolder,
+                templatePath: plugin.settings.topicTemplatePath,
+                allowedParentClasses: [],
+                requiresParent: false
+            }],
+            ['SubTopic', {
+                name: 'SubTopic',
+                folderName: plugin.settings.subtopicFolderName,
+                templatePath: plugin.settings.subtopicTemplatePath,
+                allowedParentClasses: ['Topic'],
+                requiresParent: true
+            }],
             ['HowTo', {
                 name: 'How To',
                 folderName: plugin.settings.howToFolderName,
@@ -195,34 +211,75 @@ class ResourceManager extends BaseResourceCreator {
         return Array.from(this.resourceTypes.keys());
     }
 
+    protected async createResourceWithConfig(config: ResourceType, name: string): Promise<void> {
+        if (config.allowedParentClasses.length > 0) {
+            const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
+            topicSelector.open();
+            const selected = await this.getSelectedParent(topicSelector, config.folderName);
+            if (!selected) return;
+            const resourceName = await this.getUserInput(`Enter ${config.name} name`);
+            if (!resourceName) return;
+    
+            const template = await this.templateService.loadTemplate(config.templatePath);
+            if (!template) {
+                new Notice(`${config.name} template not found!`);
+                return;
+            }
+            await this.createNoteResource(
+                config.templatePath,
+                selected.parentPath,
+                resourceName,
+                selected.file,
+                config.name
+            );
+        } else {
+            const resourceName = await this.getUserInput(`Enter ${config.name} name`);
+            if (!resourceName) return;
+    
+            const template = await this.templateService.loadTemplate(config.templatePath);
+            if (!template) {
+                new Notice(`${config.name} template not found!`);
+                return;
+            }
+            await this.createNoteResource(
+                config.templatePath,
+                config.folderName,
+                resourceName,
+                undefined,
+                config.name
+            );
+        }
+    }
 
     protected async createResource(resourceType: string): Promise<void> {
         const config = this.resourceTypes.get(resourceType);
         if (!config) return;
 
-        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
-        topicSelector.open();
+        this.createResourceWithConfig(config, resourceType);
 
-        const selected = await this.getSelectedParent(topicSelector, config.folderName);
-        if (!selected) return;
+        // const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
+        // topicSelector.open();
 
-        const resourceName = await this.getUserInput(`Enter ${config.name} name`);
-        if (!resourceName) return;
+        // const selected = await this.getSelectedParent(topicSelector, config.folderName);
+        // if (!selected) return;
 
-        const template = await this.templateService.loadTemplate(config.templatePath);
-        if (!template) {
-            new Notice(`${config.name} template not found!`);
-            return;
-        }
+        // const resourceName = await this.getUserInput(`Enter ${config.name} name`);
+        // if (!resourceName) return;
 
-        // await this.createResourceFile(template, selected, resourceName, config.name);
-        await this.createNoteResource(
-            config.templatePath,
-            selected.parentPath,
-            resourceName,
-            selected.file,
-            config.name
-        );
+        // const template = await this.templateService.loadTemplate(config.templatePath);
+        // if (!template) {
+        //     new Notice(`${config.name} template not found!`);
+        //     return;
+        // }
+
+        // // await this.createResourceFile(template, selected, resourceName, config.name);
+        // await this.createNoteResource(
+        //     config.templatePath,
+        //     selected.parentPath,
+        //     resourceName,
+        //     selected.file,
+        //     config.name
+        // );
 
     }
     
@@ -367,7 +424,9 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
     }
 
     getItems(): string[] {
-        const baseActions = ['New Topic', 'New Subtopic'];
+        // const baseActions = ['New Topic', 'New Subtopic'];
+        const baseActions = [];
+
         const resourceActions = Array.from(this.resourceManager.getResourceTypes()).map(type => `New ${type}`);
         return [...baseActions, ...resourceActions];
     }
@@ -378,8 +437,8 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 
     async onChooseItem(action: string): Promise<void> {
         const actionMap: Record<string, () => Promise<void>> = {
-            'New Topic': () => this.createTopic(),
-            'New Subtopic': () => this.createSubtopic()
+            // 'New Topic': () => this.createTopic(),
+            // 'New Subtopic': () => this.createSubtopic()
         };
 
         const handler = actionMap[action] || 
