@@ -65,6 +65,106 @@ class InputModal extends Modal {
     }
 }
 
+interface ResourceType {
+    name: string;
+    folderName: string;
+    templatePath: string;
+    allowedParentClasses: string[];
+}
+
+class ResourceManager {
+    private resourceTypes: Map<string, ResourceType>;
+
+    constructor(private plugin: MyPlugin, 
+                private templateService: TemplateService,
+                private fileService: FileService,
+                private tagService: TagService) {
+        this.resourceTypes = new Map([
+            ['HowTo', {
+                name: 'How To',
+                folderName: plugin.settings.howToFolderName,
+                templatePath: plugin.settings.howToTemplatePath,
+                allowedParentClasses: ['Topic', 'SubTopic']
+            }],
+            // Add more resource types here
+        ]);
+    }
+    getResourceTypes(): string[] {
+        return Array.from(this.resourceTypes.keys());
+    }
+    
+    async createResource(resourceType: string): Promise<void> {
+        const config = this.resourceTypes.get(resourceType);
+        if (!config) return;
+
+        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
+        topicSelector.open();
+
+        const selected = await this.getSelectedParent(topicSelector, config.folderName);
+        if (!selected) return;
+
+        const resourceName = await this.getUserInput(`Enter ${config.name} name`);
+        if (!resourceName) return;
+
+        const template = await this.templateService.loadTemplate(config.templatePath);
+        if (!template) {
+            new Notice(`${config.name} template not found!`);
+            return;
+        }
+
+        await this.createResourceFile(template, selected, resourceName, config.name);
+    }
+    
+    private async getUserInput(placeholder: string): Promise<string | null> {
+        const inputModal = new InputModal(this.plugin.app, placeholder);
+        inputModal.open();
+        return inputModal.getUserInput();
+    }
+
+    private async getSelectedParent(topicSelector: TopicSelectorModal, folderName: string) {
+        return new Promise<{file: TFile, parentPath: string}>((resolve) => {
+            topicSelector.onChooseItem = async (file) => {
+                const cache = this.plugin.app.metadataCache.getFileCache(file);
+                const frontmatter = cache?.frontmatter;
+                
+                if (frontmatter?.Class === 'Topic' && frontmatter.subfolder) {
+                    resolve({
+                        file,
+                        parentPath: `${frontmatter.subfolder}/${folderName}`
+                    });
+                } else if (frontmatter?.Class === 'SubTopic' && frontmatter.parent) {
+                    const parentMatch = frontmatter.parent.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
+                    if (parentMatch) {
+                        const parentFile = this.plugin.app.metadataCache.getFirstLinkpathDest(parentMatch[1], file.path);
+                        const parentFrontmatter = this.plugin.app.metadataCache.getFileCache(parentFile)?.frontmatter;
+                        if (parentFrontmatter?.subfolder) {
+                            resolve({
+                                file,
+                                parentPath: `${parentFrontmatter.subfolder}/${folderName}/${file.basename}`
+                            });
+                        }
+                    }
+                }
+            };
+        });
+    }
+    
+    private async createResourceFile(template: TFile, selected: {file: TFile, parentPath: string}, resourceName: string, resourceType: string) {
+        const templateContent = await this.plugin.app.vault.read(template);
+        const inheritedTags = await this.tagService.getInheritedTags(selected.file);
+        const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
+            parent: `[[${selected.file.path}|${selected.file.basename}]]`,
+            tags: inheritedTags,
+        });
+    
+        const resourcePath = `${selected.parentPath}/${resourceName}.md`;
+        const newFile = await this.fileService.createFile(resourcePath, updatedContent);
+        await this.fileService.revealInExplorer(newFile);
+        await this.fileService.openFile(newFile);
+    
+        new Notice(`Created new ${resourceType}: ${resourceName}`);
+    }
+}
 
 class TemplateService {
     constructor(private app: App, private settings: MyPluginSettings) {}
@@ -189,6 +289,7 @@ class TopicSelectorModal extends FuzzySuggestModal<TFile> {
 }
 
 class ActionSelectorModal extends FuzzySuggestModal<string> {
+    private resourceManager: ResourceManager;
     constructor(
         private plugin: MyPlugin,
         private templateService: TemplateService,
@@ -197,10 +298,13 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
     ) {
         super(plugin.app);
         this.setPlaceholder('Select action');
+        this.resourceManager = new ResourceManager(plugin, templateService, fileService, tagService);
     }
 
     getItems(): string[] {
-        return ['New Topic', 'New Subtopic', 'New How To'];
+        const baseActions = ['New Topic', 'New Subtopic'];
+        const resourceActions = Array.from(this.resourceManager.getResourceTypes()).map(type => `New ${type}`);
+        return [...baseActions, ...resourceActions];
     }
 
     getItemText(action: string): string {
@@ -208,74 +312,17 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
     }
 
     async onChooseItem(action: string): Promise<void> {
-        switch (action) {
-            case 'New Topic':
-                await this.createTopic();
-                break;
-            case 'New Subtopic':
-                await this.createSubtopic();
-                break;
-            case 'New How To':
-                await this.createHowTo();
-                break;
-        }
+        const actionMap: Record<string, () => Promise<void>> = {
+            'New Topic': () => this.createTopic(),
+            'New Subtopic': () => this.createSubtopic()
+        };
+
+        const handler = actionMap[action] || 
+            (() => this.resourceManager.createResource(action.replace('New ', '')));
+            
+        await handler();
     }
 
-    private async createHowTo() {
-        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, ['Topic', 'SubTopic']);
-        topicSelector.open();
-
-        const selected = await new Promise<{file: TFile, parentPath: string}>((resolve) => {
-            topicSelector.onChooseItem = async (file) => {
-                const cache = this.plugin.app.metadataCache.getFileCache(file);
-                const frontmatter = cache?.frontmatter;
-                
-                if (frontmatter?.Class === 'Topic' && frontmatter.subfolder) {
-                    resolve({
-                        file,
-                        parentPath: `${frontmatter.subfolder}/${this.plugin.settings.howToFolderName}`
-                    });
-                } else if (frontmatter?.Class === 'SubTopic' && frontmatter.parent) {
-                    const parentMatch = frontmatter.parent.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
-                    if (parentMatch) {
-                        const parentFile = this.plugin.app.metadataCache.getFirstLinkpathDest(parentMatch[1], file.path);
-                        const parentFrontmatter = this.plugin.app.metadataCache.getFileCache(parentFile)?.frontmatter;
-                        if (parentFrontmatter?.subfolder) {
-                            resolve({
-                                file,
-                                parentPath: `${parentFrontmatter.subfolder}/${this.plugin.settings.howToFolderName}/${file.basename}`
-                            });
-                        }
-                    }
-                }
-            };
-        });
-
-        if (!selected) return;
-
-        const howToName = await this.getUserInput('Enter How To name');
-        if (!howToName) return;
-
-        const template = await this.templateService.loadTemplate(this.plugin.settings.howToTemplatePath);
-        if (!template) {
-            new Notice('How To template not found!');
-            return;
-        }
-
-        const templateContent = await this.plugin.app.vault.read(template);
-        const inheritedTags = await this.tagService.getInheritedTags(selected.file);
-        const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
-            parent: `[[${selected.file.path}|${selected.file.basename}]]`,
-            tags: inheritedTags,
-        });
-
-        const howToPath = `${selected.parentPath}/${howToName}.md`;
-        const newFile = await this.fileService.createFile(howToPath, updatedContent);
-        await this.fileService.revealInExplorer(newFile);
-        await this.fileService.openFile(newFile);
-
-        new Notice(`Created new How To: ${howToName}`);
-    }
 
     private async getSelectedTopic(): Promise<TopicData | null> {
         const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, ['Topic']);
