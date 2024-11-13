@@ -93,9 +93,9 @@ export class TagsManager {
 	constructor(private app: App) {}
 
 	async updateInherited(file: TFile) {
-		// console.log("updateInherited");
-		// const tags = getFileTags(file, 'inherited');
-		// console.log(tags);
+		console.log("updateInherited");
+		const tags = getFileTags(file, 'inherited');
+		console.log(tags);
 	}
 	
 	async updateRelated(file: TFile) {
