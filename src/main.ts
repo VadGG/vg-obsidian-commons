@@ -101,16 +101,22 @@ class FileService {
 class TagService {
     constructor(private app: App) {}
 
+    prefixTag(prefix: string, tag: string): string {
+        if (tag.contains(prefix)) return tag;
+        return `${prefix}/${tag}`;
+    }
+
     async getInheritedTags(file: TFile): Promise<string[]> {
         const tags = new Set<string>();
         const cache = this.app.metadataCache.getFileCache(file);
-        
+        const prefix = "inherited";
+
         // Add current file tags
         if (cache?.frontmatter?.tags) {
             const currentTags = Array.isArray(cache.frontmatter.tags) 
                 ? cache.frontmatter.tags 
                 : [cache.frontmatter.tags];
-            currentTags.forEach(tag => tags.add(tag));
+            currentTags.forEach(tag => tags.add(this.prefixTag(prefix, tag)));
         }
 
         // Get parent's tags
@@ -120,7 +126,7 @@ class TagService {
                 const parentFile = this.app.metadataCache.getFirstLinkpathDest(parentMatch[1], file.path);
                 if (parentFile instanceof TFile) {
                     const parentTags = await this.getInheritedTags(parentFile);
-                    parentTags.forEach(tag => tags.add(`inherited/${tag}`));
+                    parentTags.forEach(tag => tags.add(this.prefixTag(prefix, tag)));
                 }
             }
         }
@@ -260,7 +266,7 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
         }
 
         const templateContent = await this.plugin.app.vault.read(template);
-        const inheritedTags = await this.getInheritedTags(selectedTopic.file);
+        const inheritedTags = await this.tagService.getInheritedTags(selectedTopic.file);
         const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
             parent: selectedTopic.parentLink,
             tags: inheritedTags,
@@ -274,26 +280,6 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
         new Notice(`Created new subtopic: ${subtopicName}`);
     }
 
-    private async getInheritedTags(file: TFile): Promise<string[]> {
-        const tags = new Set<string>();
-        const cache = this.plugin.app.metadataCache.getFileCache(file);
-        if (cache?.frontmatter?.tags) {
-            const currentTags = Array.isArray(cache.frontmatter.tags) ? cache.frontmatter.tags : [cache.frontmatter.tags];
-            currentTags.forEach((tag) => tags.add(tag));
-        }
-
-        if (cache?.frontmatter?.parent) {
-            const parentMatch = cache.frontmatter.parent.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
-            if (parentMatch) {
-                const parentFile = this.plugin.app.metadataCache.getFirstLinkpathDest(parentMatch[1], file.path);
-                if (parentFile instanceof TFile) {
-                    (await this.getInheritedTags(parentFile)).forEach((tag) => tags.add(tag));
-                }
-            }
-        }
-
-        return Array.from(tags);
-    }
 }
 
 
