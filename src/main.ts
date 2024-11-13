@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent  } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent } from 'obsidian';
 import matter from 'gray-matter';
 
 
@@ -15,177 +15,171 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 
 type Metadata = {
 	[key: string]: string;
-  };
+};
 
 
 interface TopicData {
-    file: TFile;
-    subfolder: string;
-    parentLink: string;
+	file: TFile;
+	subfolder: string;
+	parentLink: string;
 }
 
 class InputModal extends Modal {
-    private result: string;
-    private inputEl: TextComponent;
-    private resolvePromise: (value: string | null) => void;
+	private result: string;
+	private inputEl: TextComponent;
+	private resolvePromise: (value: string | null) => void;
 
-    constructor(app: App, private placeholder: string) {
-        super(app);
-    }
+	constructor(app: App, private placeholder: string) {
+		super(app);
+	}
 
-    onOpen() {
-        const { contentEl } = this;
-        this.inputEl = new TextComponent(contentEl)
-            .setPlaceholder(this.placeholder);
-        
-        this.inputEl.inputEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                this.resolvePromise(this.inputEl.getValue());
-                this.close();
-            }
-            if (e.key === 'Escape') {
-                this.resolvePromise(null);
-                this.close();
-            }
-        });
-        
-        this.inputEl.inputEl.focus();
-    }
+	onOpen() {
+		const { contentEl } = this;
+		this.inputEl = new TextComponent(contentEl)
+			.setPlaceholder(this.placeholder);
 
-    async getUserInput(): Promise<string | null> {
-        return new Promise((resolve) => {
-            this.resolvePromise = resolve;
-        });
-    }
+		this.inputEl.inputEl.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				this.resolvePromise(this.inputEl.getValue());
+				this.close();
+			}
+			if (e.key === 'Escape') {
+				this.resolvePromise(null);
+				this.close();
+			}
+		});
 
-    onClose() {
-        this.contentEl.empty();
-    }
+		this.inputEl.inputEl.focus();
+	}
+
+	async getUserInput(): Promise<string | null> {
+		return new Promise((resolve) => {
+			this.resolvePromise = resolve;
+		});
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
 }
 
 
-class TopicSelectorModal extends FuzzySuggestModal<TFile> {
-    constructor(app: App, private allowedClasses: string[]) {
-        super(app);
-        this.setPlaceholder(`Select a ${allowedClasses.join(" or ")} note`);
-    }
+class TemplateService {
+	constructor(private app: App) { }
 
-    getItems(): TFile[] {
-        return this.app.vault.getMarkdownFiles().filter(file => {
-            if (file.path.startsWith('99_Organize/')) {
-                return false;
-            }
+	async getTemplate(templatePath: string): Promise<TFile | null> {
+		const template = await this.app.vault.getAbstractFileByPath(templatePath);
+		return template instanceof TFile ? template : null;
+	}
 
-            const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
-            if (!frontmatter?.Class) return false;
-
-            const classMatch = this.allowedClasses.map(c => c.toLowerCase())
-                                 .includes(frontmatter.Class.toLowerCase());
-            
-            // For Topic class, require subfolder field
-            if (frontmatter.Class === 'Topic') {
-                return classMatch && !!frontmatter.subfolder;
-            }
-            
-            // For SubTopic, no additional requirements
-            return classMatch;
-        });
-    }
-
-    getItemText(file: TFile): string {
-        const cache = this.app.metadataCache.getFileCache(file);
-        const frontmatter = cache?.frontmatter;
-        
-        if (frontmatter?.Class === 'SubTopic' && frontmatter.parent) {
-            const parentMatch = frontmatter.parent.match(/\[\[.*\|(.*?)\]\]/) || 
-                              frontmatter.parent.match(/\[\[(.*?)\]\]/);
-            const parentName = parentMatch ? parentMatch[1] : 'Unknown Parent';
-            return `${parentName} - ${file.basename}`;
-        }
-        
-        return file.basename;
-    }
-
-    onChooseItem(file: TFile): void {
-        console.log("Selected file:", file);
-    }
+	async updateFrontmatter(templateContent: string, updates: Record<string, any>): Promise<string> {
+		const { data: frontmatter, content } = matter(templateContent);
+		Object.assign(frontmatter, updates);
+		return matter.stringify(content, frontmatter);
+	}
 }
 
-class ActionSelectorModal extends FuzzySuggestModal<string> {
-    constructor(private plugin: MyPlugin) {
-        super(plugin.app);
-        this.setPlaceholder("Select action");
-    }
+class FileService {
+	constructor(private app: App) { }
 
-    getItems(): string[] {
-        return [
-            "New Topic",
-            "New Subtopic"
-        ];
-    }
-
-    getItemText(item: string): string {
-        return item;
-    }
-
-    async onChooseItem(action: string): Promise<void> {
-        switch (action) {
-            case "New Topic":
-                await this.handleNewTopic();
-                break;
-            case "New Subtopic":
-                await this.handleNewSubtopic();
-                break;
-        }
-    }
-
-    private async handleNewTopic() {
-        const inputModal = new InputModal(this.app, "Enter topic name");
-        inputModal.open();
-        const topicName = await inputModal.getUserInput();
-        
-        if (!topicName) return;
-
-        const template = await this.app.vault.getAbstractFileByPath("99_Organize/Templates/TopicTemplate.md");
-        if (!(template instanceof TFile)) {
-            new Notice("Topic template not found!");
-            return;
-        }
-
-        const templateContent = await this.app.vault.read(template);
-        const newFile = await this.app.vault.create(`10_Topics/${topicName}.md`, templateContent);
-
+	async createAndReveal(path: string, content: string): Promise<TFile> {
+		const newFile = await this.app.vault.create(path, content);
 		const leaf = this.app.workspace.getLeaf();
 		leaf.openFile(newFile);
 		this.app.workspace.revealLeaf(leaf);
-	
-        new Notice(`Created new topic: ${topicName}`);
-    }
+		return newFile;
+	}
 
-	private async updateTemplate(templatePath: string, metadata: Metadata) {
-		const templateContent = fs.readFileSync(templatePath, 'utf8');
-		const { data } = matter(templateContent);
-	  
-		// Update the metadata fields
-		for (const [field, value] of Object.entries(metadata)) {
-		  data[field] = value;
+	async ensureFolder(path: string): Promise<void> {
+		await this.app.vault.adapter.mkdir(path);
+	}
+}
+
+class TopicSelectorModal extends FuzzySuggestModal<TFile> {
+	constructor(app: App, private allowedClasses: string[]) {
+		super(app);
+		this.setPlaceholder(`Select a ${allowedClasses.join(" or ")} note`);
+
+	}
+
+	getItems(): TFile[] {
+		return this.app.vault.getMarkdownFiles().filter(file => {
+			if (file.path.startsWith('99_Organize/')) {
+				return false;
+			}
+
+			const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+			if (!frontmatter?.Class) return false;
+
+			const classMatch = this.allowedClasses.map(c => c.toLowerCase())
+				.includes(frontmatter.Class.toLowerCase());
+
+			// For Topic class, require subfolder field
+			if (frontmatter.Class === 'Topic') {
+				return classMatch && !!frontmatter.subfolder;
+			}
+
+			// For SubTopic, no additional requirements
+			return classMatch;
+		});
+	}
+
+	getItemText(file: TFile): string {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const frontmatter = cache?.frontmatter;
+
+		if (frontmatter?.Class === 'SubTopic' && frontmatter.parent) {
+			const parentMatch = frontmatter.parent.match(/\[\[.*\|(.*?)\]\]/) ||
+				frontmatter.parent.match(/\[\[(.*?)\]\]/);
+			const parentName = parentMatch ? parentMatch[1] : 'Unknown Parent';
+			return `${parentName} - ${file.basename}`;
 		}
-	  
-		// Dump the updated template with frontmatter
-		const updatedContent = matter.stringify(templateContent, data);
-		return updatedContent;
-	  }
-	
-	private async handleNewSubtopic() {
-        const topicSelector = new TopicSelectorModal(this.app, ['Topic']);
+
+		return file.basename;
+	}
+
+	onChooseItem(file: TFile): void {
+		console.log("Selected file:", file);
+	}
+}
+
+class ActionSelectorModal extends FuzzySuggestModal<string> {
+	constructor(private plugin: MyPlugin, private templateService: TemplateService, private fileService: FileService) {
+		super(plugin.app);
+		this.setPlaceholder("Select action");
+	}
+
+	getItems(): string[] {
+		return [
+			"New Topic",
+			"New Subtopic"
+		];
+	}
+
+	getItemText(item: string): string {
+		return item;
+	}
+
+	async onChooseItem(action: string): Promise<void> {
+		switch (action) {
+			case "New Topic":
+				await this.handleNewTopic();
+				break;
+			case "New Subtopic":
+				await this.handleNewSubtopic();
+				break;
+		}
+	}
+	private async getSelectedTopic(): Promise<TopicData | null> {
+		const topicSelector = new TopicSelectorModal(this.app, ['Topic']);
 		topicSelector.open();
-		
-		const selectedTopic = await new Promise<TopicData | null>((resolve) => {
+
+		return new Promise<TopicData | null>((resolve) => {
 			topicSelector.onChooseItem = async (file) => {
 				const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
 				if (frontmatter?.subfolder) {
-					resolve({ 
-						file, 
+					resolve({
+						file,
 						subfolder: frontmatter.subfolder,
 						parentLink: `[[${file.path}|${file.basename}]]`
 					});
@@ -195,97 +189,85 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 				}
 			};
 		});
-	
-		if (!selectedTopic) return;
-	
-		console.log(selectedTopic);
-		const inputModal = new InputModal(this.app, "Enter subtopic name");
+	}
+
+	private async getUserInput(placeholder: string): Promise<string | null> {
+		const inputModal = new InputModal(this.app, placeholder);
 		inputModal.open();
-		const subtopicName = await inputModal.getUserInput();
-		
+		return inputModal.getUserInput();
+	}
+
+	private async handleNewTopic() {
+		const topicName = await this.getUserInput("Enter topic name");
+		if (!topicName) return;
+
+		const template = await this.app.vault.getAbstractFileByPath("99_Organize/Templates/TopicTemplate.md");
+		if (!(template instanceof TFile)) {
+			new Notice("Topic template not found!");
+			return;
+		}
+
+		const templateContent = await this.app.vault.read(template);
+		await this.fileService.createAndReveal(`10_Topics/${topicName}.md`, templateContent);
+		new Notice(`Created new topic: ${topicName}`);
+	}
+
+
+
+	private async handleNewSubtopic() {
+		const selectedTopic = await this.getSelectedTopic();
+		if (!selectedTopic) return;
+
+		const subtopicName = await this.getUserInput("Enter subtopic name");
 		if (!subtopicName) return;
-	
+
 		// Read template
 		const template = await this.app.vault.getAbstractFileByPath("99_Organize/Templates/SubtopicTemplate.md");
 		if (!(template instanceof TFile)) {
 			new Notice("Subtopic template not found!");
 			return;
 		}
-	
+
 		// Get inherited tags from parent hierarchy
 		let templateContent = await this.app.vault.read(template);
 		const inheritedTags = await this.getInheritedTags(selectedTopic.file);
 		// const { data: frontmatter, content } = matter(templateContent);
-		
-		const parentLinkMd = `"[[${selectedTopic.file.path}|${selectedTopic.file.basename}]]"`;
 
-		const { data: frontmatter, content } = matter(templateContent);
-		console.log("00 -------- frontmatter:");
-		console.log(frontmatter);
-
-		// Replace template variables
-		// templateContent = templateContent
-		// 	.replace('{{parent}}', parentLinkMd)
-		// 	.replace('{{tags}}', inheritedTags.join(', '));
-
-		// Update frontmatter with new values
-		frontmatter.parent = `[[${selectedTopic.file.path}|${selectedTopic.file.basename}]]`;
-		frontmatter.itags = inheritedTags;
-		
-		// Reconstruct the file content with updated frontmatter
-		templateContent = matter.stringify(content, frontmatter);
-	
-		// Create new subtopic in correct location
-		const subtopicPath = `${selectedTopic.subfolder}/00_Subtopics/${subtopicName}.md`;
+		const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
+			parent: `[[${selectedTopic.file.path}|${selectedTopic.file.basename}]]`,
+			tags: inheritedTags
+		});
 		const folderPath = `${selectedTopic.subfolder}/00_Subtopics`;
+		await this.fileService.ensureFolder(folderPath);
 
-		// Create folder if it doesn't exist
-		await this.app.vault.adapter.mkdir(folderPath);
-
-		// Then create the file
-		const newFile = await this.app.vault.create(subtopicPath, templateContent);
-
-		const leaf = this.app.workspace.getLeaf();
-		leaf.openFile(newFile);
-		this.app.workspace.revealLeaf(leaf);
+		await this.fileService.createAndReveal(
+			`${folderPath}/${subtopicName}.md`,
+			updatedContent
+		);
 
 		new Notice(`Created new subtopic: ${subtopicName}`);
 	}
-	
+
 	private async getInheritedTags(file: TFile): Promise<string[]> {
 		const tags = new Set<string>();
 		const cache = this.app.metadataCache.getFileCache(file);
-		
+
 		if (!cache?.frontmatter) return Array.from(tags);
-		console.log("---------------- frontmatter: ");
-		console.log(cache.frontmatter);
-	
+
 		// Add current file's tags
 		if (cache.frontmatter.tags) {
-			const currentTags = Array.isArray(cache.frontmatter.tags) 
-				? cache.frontmatter.tags 
+			const currentTags = Array.isArray(cache.frontmatter.tags)
+				? cache.frontmatter.tags
 				: [cache.frontmatter.tags];
 			currentTags.forEach(tag => tags.add(tag));
 		}
-	
+
 		// Get parent and recurse up the ancestry
-		console.log("---------------- parent: ");
-		console.log(cache.frontmatter.parent);
 		if (cache.frontmatter.parent) {
 			const parentMatch = cache.frontmatter.parent.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
-			console.log("---------------- parentMatch: ");
-			console.log(parentMatch);
 
 			if (parentMatch) {
 				const parentPath = parentMatch[1];
-				// // Search for the file in the vault
-				// const parentFile = this.app.vault.getMarkdownFiles().find(f => 
-				// 	f.basename === parentName || 
-				// 	f.path === parentName || 
-				// 	f.path === `10_Topics/${parentName}.md`
-				// );
-
-
 				let parentFile: TAbstractFile | null;
 
 				parentFile = this.app.metadataCache.getFirstLinkpathDest(parentPath, file.path);
@@ -293,19 +275,12 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 					parentFile = this.app.metadataCache.getFirstLinkpathDest(parentPath, file.path);
 				}
 
-				// const parentFile = this.app.vault.getAbstractFileByPath(parentPath);
-				console.log("---------------- parentFile: ");
-				console.log(parentFile);
-				
 				if (parentFile instanceof TFile) {
 					const parentTags = await this.getInheritedTags(parentFile);
 					parentTags.forEach(tag => tags.add(tag));
 				}
 			}
 		}
-	
-		console.log("---------------- tags: ");
-		console.log(Array.from(tags));
 
 		return Array.from(tags);
 	}
@@ -315,6 +290,8 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 
 export default class MyPlugin extends Plugin {
 	settings: MyPluginSettings;
+	templateService: TemplateService;
+	fileService: FileService;
 
 	onFileFileModified(file: TAbstractFile) {
 		console.log('file saved');
@@ -326,19 +303,23 @@ export default class MyPlugin extends Plugin {
 			console.log("Unknown file type");
 		}
 	}
-	
+
 	async onload() {
 		await this.loadSettings();
+
+		const templateService = new TemplateService(this.app);
+		const fileService = new FileService(this.app);
+
 		this.addCommand({
 			id: 'create-new-content',
 			name: 'Create New Content',
 			callback: () => {
-				new ActionSelectorModal(this).open();
+				new ActionSelectorModal(this, templateService, fileService).open();
 			}
 		});
 
 		// TODO listen to modify file event
-    	// this.registerEvent(this.app.vault.on('modify', this.onFileFileModified.bind(this)));
+		// this.registerEvent(this.app.vault.on('modify', this.onFileFileModified.bind(this)));
 
 		// This creates an icon in the left ribbon.
 		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
@@ -347,12 +328,12 @@ export default class MyPlugin extends Plugin {
 
 			const activeFile = this.app.workspace.getActiveFile();
 			if (activeFile) {
-				
-				console.log( getFileValues(activeFile, 'subject_folder') );
+
+				console.log(getFileValues(activeFile, 'subject_folder'));
 			} else {
 				console.log("No active file");
 			}
-		
+
 		});
 		// Perform additional things with the ribbon
 		ribbonIconEl.addClass('my-plugin-ribbon-class');
@@ -407,7 +388,7 @@ export default class MyPlugin extends Plugin {
 			// console.log('click', evt);
 		});
 
-		
+
 
 		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
 		// this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
@@ -432,12 +413,12 @@ class SampleModal extends Modal {
 	}
 
 	onOpen() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.setText('Woah!');
 	}
 
 	onClose() {
-		const {contentEl} = this;
+		const { contentEl } = this;
 		contentEl.empty();
 	}
 }
@@ -451,7 +432,7 @@ class SampleSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this;
 
 		containerEl.empty();
 
