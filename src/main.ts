@@ -72,56 +72,28 @@ interface ResourceType {
     allowedParentClasses: string[];
 }
 
-class ResourceManager {
-    private resourceTypes: Map<string, ResourceType>;
+class BaseResourceCreator {
+    private settings: MyPluginSettings;
+    private app: App;
 
-    constructor(private plugin: MyPlugin, 
-                private templateService: TemplateService,
-                private fileService: FileService,
-                private tagService: TagService) {
-        this.resourceTypes = new Map([
-            ['HowTo', {
-                name: 'How To',
-                folderName: plugin.settings.howToFolderName,
-                templatePath: plugin.settings.howToTemplatePath,
-                allowedParentClasses: ['Topic', 'SubTopic']
-            }],
-            // Add more resource types here
-        ]);
+    constructor(
+        protected plugin: MyPlugin,
+        protected templateService: TemplateService,
+        protected fileService: FileService,
+        protected tagService: TagService
+    ) {
+        this.settings = plugin.settings;
+        this.app = plugin.app;
     }
-    getResourceTypes(): string[] {
-        return Array.from(this.resourceTypes.keys());
-    }
-    
-    async createResource(resourceType: string): Promise<void> {
-        const config = this.resourceTypes.get(resourceType);
-        if (!config) return;
 
-        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
-        topicSelector.open();
 
-        const selected = await this.getSelectedParent(topicSelector, config.folderName);
-        if (!selected) return;
-
-        const resourceName = await this.getUserInput(`Enter ${config.name} name`);
-        if (!resourceName) return;
-
-        const template = await this.templateService.loadTemplate(config.templatePath);
-        if (!template) {
-            new Notice(`${config.name} template not found!`);
-            return;
-        }
-
-        await this.createResourceFile(template, selected, resourceName, config.name);
-    }
-    
-    private async getUserInput(placeholder: string): Promise<string | null> {
+    protected async getUserInput(placeholder: string): Promise<string | null> {
         const inputModal = new InputModal(this.plugin.app, placeholder);
         inputModal.open();
         return inputModal.getUserInput();
     }
 
-    private async getSelectedParent(topicSelector: TopicSelectorModal, folderName: string) {
+    protected async getSelectedParent(topicSelector: TopicSelectorModal, folderName: string) {
         return new Promise<{file: TFile, parentPath: string}>((resolve) => {
             topicSelector.onChooseItem = async (file) => {
                 const cache = this.plugin.app.metadataCache.getFileCache(file);
@@ -148,8 +120,8 @@ class ResourceManager {
             };
         });
     }
-    
-    private async createResourceFile(template: TFile, selected: {file: TFile, parentPath: string}, resourceName: string, resourceType: string) {
+
+    protected async createResourceFile(template: TFile, selected: {file: TFile, parentPath: string}, resourceName: string, resourceType: string) {
         const templateContent = await this.plugin.app.vault.read(template);
         const inheritedTags = await this.tagService.getInheritedTags(selected.file);
         const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
@@ -164,6 +136,99 @@ class ResourceManager {
     
         new Notice(`Created new ${resourceType}: ${resourceName}`);
     }
+
+    protected async createNoteResource(
+        templatePath: string,
+        targetPath: string,
+        name: string,
+        parentFile?: TFile,
+        resourceType: string = 'resource'
+    ): Promise<void> {
+        const template = await this.templateService.loadTemplate(templatePath);
+        if (!template) {
+            new Notice(`${resourceType} template not found in ${templatePath}!`);
+            return;
+        }
+
+        const templateContent = await this.app.vault.read(template);
+        let updatedContent = templateContent;
+
+        if (parentFile) {
+            const inheritedTags = await this.tagService.getInheritedTags(parentFile);
+            updatedContent = await this.templateService.updateFrontmatter(templateContent, {
+                parent: `[[${parentFile.path}|${parentFile.basename}]]`,
+                tags: inheritedTags,
+            });
+        }
+
+        const filePath = `${targetPath}/${name}.md`;
+        const newFile = await this.fileService.createFile(filePath, updatedContent);
+        await this.fileService.revealInExplorer(newFile);
+        await this.fileService.openFile(newFile);
+
+        new Notice(`Created new ${resourceType}: ${name}`);
+    }
+}
+
+class ResourceManager extends BaseResourceCreator {
+    private resourceTypes: Map<string, ResourceType>;
+
+    constructor(
+        plugin: MyPlugin,
+        templateService: TemplateService,
+        fileService: FileService,
+        tagService: TagService
+    ) {
+        super(plugin, templateService, fileService, tagService);
+        this.resourceTypes = new Map([
+            ['HowTo', {
+                name: 'How To',
+                folderName: plugin.settings.howToFolderName,
+                templatePath: plugin.settings.howToTemplatePath,
+                allowedParentClasses: ['Topic', 'SubTopic']
+            }]
+        ]);
+    }
+
+
+    getResourceTypes(): string[] {
+        return Array.from(this.resourceTypes.keys());
+    }
+
+
+    protected async createResource(resourceType: string): Promise<void> {
+        const config = this.resourceTypes.get(resourceType);
+        if (!config) return;
+
+        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
+        topicSelector.open();
+
+        const selected = await this.getSelectedParent(topicSelector, config.folderName);
+        if (!selected) return;
+
+        const resourceName = await this.getUserInput(`Enter ${config.name} name`);
+        if (!resourceName) return;
+
+        const template = await this.templateService.loadTemplate(config.templatePath);
+        if (!template) {
+            new Notice(`${config.name} template not found!`);
+            return;
+        }
+
+        // await this.createResourceFile(template, selected, resourceName, config.name);
+        await this.createNoteResource(
+            config.templatePath,
+            selected.parentPath,
+            resourceName,
+            selected.file,
+            config.name
+        );
+
+    }
+    
+
+    
+
 }
 
 class TemplateService {
