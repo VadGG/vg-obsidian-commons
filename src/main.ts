@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent } from 'obsidian';
+import { App, TFolder, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent } from 'obsidian';
 import matter from 'gray-matter';
 
 
@@ -11,6 +11,7 @@ interface MyPluginSettings {
     subtopicTemplatePath: string;
     topicFolder: string;
     subtopicFolderName: string;
+	selectorIgnoreFolderName: string;
     defaultSetting: string;
 }
 
@@ -19,6 +20,7 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
     subtopicTemplatePath: '99_Organize/Templates/SubtopicTemplate.md',
     topicFolder: '10_Topics',
     subtopicFolderName: '00_Subtopics',
+	selectorIgnoreFolderName: '99_Organize',
     defaultSetting: 'default',
 };
 
@@ -102,6 +104,8 @@ class FileService {
         }
     }
 }
+
+
 
 class TopicSelectorModal extends FuzzySuggestModal<TFile> {
     constructor(app: App, private allowedClasses: string[]) {
@@ -382,9 +386,6 @@ export default class MyPlugin extends Plugin {
 		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
 		// this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
-
-
-
 }
 
 
@@ -413,17 +414,87 @@ class SettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Subtopic Template Path')
-            .setDesc('Path to the template for subtopics.')
-            .addText((text) =>
-                text
-                    .setPlaceholder('Example: 99_Organize/Templates/SubtopicTemplate.md')
-                    .setValue(this.plugin.settings.subtopicTemplatePath)
+            .setName('Selector Ignore Folder')
+            .setDesc('Folder to ignore when selecting topics')
+            .addSearch(search => {
+                let isModalOpen = false;  // Flag to prevent reopening
+                
+                search
+                    .setPlaceholder("Example: 99_Organize")
+                    .setValue(this.plugin.settings.selectorIgnoreFolderName)
                     .onChange(async (value) => {
-                        this.plugin.settings.subtopicTemplatePath = value;
+                        this.plugin.settings.selectorIgnoreFolderName = value;
                         await this.plugin.saveSettings();
-                    })
-            );
+                    });
+                
+                let previousValue = this.plugin.settings.selectorIgnoreFolderName;
+                
+                search.inputEl.addEventListener('focus', () => {
+                    // Prevent reopening if modal is already open
+                    if (isModalOpen) {
+                        search.inputEl.blur();
+                        return;
+                    }
+                    
+                    isModalOpen = true;
+                    const modal = new FolderSuggestModal(
+                        this.app,
+                        (folder) => {
+                            if (folder) {
+                                search.setValue(folder.path);
+                                this.plugin.settings.selectorIgnoreFolderName = folder.path;
+                                this.plugin.saveSettings();
+                            }
+                            // Use setTimeout to ensure modal is fully closed before removing focus
+                            setTimeout(() => {
+                                search.inputEl.blur();
+                                isModalOpen = false;
+                            }, 50);
+                        },
+                        () => {
+                            search.setValue(previousValue);
+                            this.plugin.settings.selectorIgnoreFolderName = previousValue;
+                            this.plugin.saveSettings();
+                            setTimeout(() => {
+                                search.inputEl.blur();
+                                isModalOpen = false;
+                            }, 50);
+                        }
+                    );
+                    modal.open();
+                });
+            });
     }
 }
 
+class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
+    constructor(
+        app: App, 
+        private onSelect: (folder: TFolder | null) => void,
+        private onCancel: () => void
+    ) {
+        super(app);
+        this.setPlaceholder("Select folder to ignore");
+    }
+
+    getItems(): TFolder[] {
+        return this.app.vault.getAllLoadedFiles()
+            .filter((file): file is TFolder => file instanceof TFolder);
+    }
+
+    getItemText(folder: TFolder): string {
+        return folder.path;
+    }
+
+    onChooseItem(folder: TFolder): void {
+        this.onSelect(folder);
+        this.close();
+    }
+
+    onClose(): void {
+        if (this.isOpen) {
+            this.onCancel();
+        }
+        super.onClose();
+    }
+}
