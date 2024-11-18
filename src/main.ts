@@ -1,32 +1,46 @@
-import { App, TFolder, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent } from 'obsidian';
+import { App, TFolder, Editor, MarkdownView, Modal, Notice, ToggleComponent, Plugin, PluginSettingTab, Setting, TFile, TAbstractFile, FuzzySuggestModal, TextComponent } from 'obsidian';
 import matter from 'gray-matter';
 
+interface ResourceTypeSettings {
+    name: string;
+    folderName: string;
+    templatePath: string;
+    allowedParentClasses: string[];
+    requiresParent?: boolean;
+}
+
 interface MyPluginSettings {
-    topicTemplatePath: string;
-    subtopicTemplatePath: string;
-    topicFolder: string;
-    subtopicFolderName: string;
 	selectorIgnoreFolderName: string;
-    howToTemplatePath: string;
-    howToFolderName: string;
+    resourceTypes: Record<string, ResourceTypeSettings>;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
-    topicTemplatePath: '99_Organize/Templates/TopicTemplate.md',
-    subtopicTemplatePath: '99_Organize/Templates/SubtopicTemplate.md',
-    topicFolder: '10_Topics',
-    subtopicFolderName: '00_Subtopics',
 	selectorIgnoreFolderName: '99_Organize',
-    howToTemplatePath: '99_Organize/Templates/HowToTemplate.md',
-    howToFolderName: '20_HowTos',
+
+    resourceTypes: {
+        'Topic': {
+            name: 'Topic',
+            folderName: '10_Topics',
+            templatePath: '99_Organize/Templates/TopicTemplate.md',
+            allowedParentClasses: [],
+            requiresParent: false
+        },
+        'SubTopic': {
+            name: 'SubTopic',
+            folderName: '00_Subtopics',
+            templatePath: '99_Organize/Templates/SubtopicTemplate.md',
+            allowedParentClasses: ['Topic'],
+            requiresParent: true
+        },
+        'HowTo': {
+            name: 'How To',
+            folderName: '20_HowTos',
+            templatePath: '99_Organize/Templates/HowToTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic']
+        }
+    }
 };
 
-
-interface TopicData {
-	file: TFile;
-	subfolder: string;
-	parentLink: string;
-}
 
 class InputModal extends Modal {
     private inputEl: TextComponent;
@@ -173,8 +187,6 @@ class BaseResourceCreator {
 }
 
 class ResourceManager extends BaseResourceCreator {
-    private resourceTypes: Map<string, ResourceType>;
-
     constructor(
         plugin: MyPlugin,
         templateService: TemplateService,
@@ -182,33 +194,28 @@ class ResourceManager extends BaseResourceCreator {
         tagService: TagService
     ) {
         super(plugin, templateService, fileService, tagService);
-        this.resourceTypes = new Map([
-            ['Topic', {
-                name: 'Topic',
-                folderName: plugin.settings.topicFolder,
-                templatePath: plugin.settings.topicTemplatePath,
-                allowedParentClasses: [],
-                requiresParent: false
-            }],
-            ['SubTopic', {
-                name: 'SubTopic',
-                folderName: plugin.settings.subtopicFolderName,
-                templatePath: plugin.settings.subtopicTemplatePath,
-                allowedParentClasses: ['Topic'],
-                requiresParent: true
-            }],
-            ['HowTo', {
-                name: 'How To',
-                folderName: plugin.settings.howToFolderName,
-                templatePath: plugin.settings.howToTemplatePath,
-                allowedParentClasses: ['Topic', 'SubTopic']
-            }]
-        ]);
     }
 
 
-    public getResourceTypes(): string[] {
-        return Array.from(this.resourceTypes.keys());
+    getResourceTypes(): string[] {
+        return Object.keys(this.plugin.settings.resourceTypes);
+    }
+
+    getResourceConfig(resourceType: string): ResourceTypeSettings | undefined {
+        return this.plugin.settings.resourceTypes[resourceType];
+    }
+
+    async addResourceType(
+        key: string, 
+        config: ResourceTypeSettings
+    ): Promise<void> {
+        this.plugin.settings.resourceTypes[key] = config;
+        await this.plugin.saveSettings();
+    }
+
+    async removeResourceType(key: string): Promise<void> {
+        delete this.plugin.settings.resourceTypes[key];
+        await this.plugin.saveSettings();
     }
 
     protected async createResourceWithConfig(config: ResourceType, name: string): Promise<void> {
@@ -252,35 +259,10 @@ class ResourceManager extends BaseResourceCreator {
     }
 
     protected async createResource(resourceType: string): Promise<void> {
-        const config = this.resourceTypes.get(resourceType);
+        const config = this.plugin.settings.resourceTypes[resourceType];
         if (!config) return;
 
         this.createResourceWithConfig(config, resourceType);
-
-        // const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, config.allowedParentClasses);
-        // topicSelector.open();
-
-        // const selected = await this.getSelectedParent(topicSelector, config.folderName);
-        // if (!selected) return;
-
-        // const resourceName = await this.getUserInput(`Enter ${config.name} name`);
-        // if (!resourceName) return;
-
-        // const template = await this.templateService.loadTemplate(config.templatePath);
-        // if (!template) {
-        //     new Notice(`${config.name} template not found!`);
-        //     return;
-        // }
-
-        // // await this.createResourceFile(template, selected, resourceName, config.name);
-        // await this.createNoteResource(
-        //     config.templatePath,
-        //     selected.parentPath,
-        //     resourceName,
-        //     selected.file,
-        //     config.name
-        // );
-
     }
     
 
@@ -560,8 +542,14 @@ export default class MyPlugin extends Plugin {
                 const frontmatter = this.app.metadataCache.getFileCache(activeFile)?.frontmatter;
                 const currentClass = frontmatter?.Class;
                 
-                const resourceManager = new ResourceManager(this, templateService, fileService, tagService);
-                const resourceType = resourceManager.resourceTypes.get(currentClass);
+                const resourceManager = new ResourceManager(
+                    this, 
+                    templateService, 
+                    fileService, 
+                    tagService
+                );
+                
+                const resourceType = this.settings.resourceTypes[currentClass];
                 
                 if (!resourceType?.allowedParentClasses?.length) {
                     new Notice('This note type cannot have a parent');
@@ -690,47 +678,6 @@ class SettingTab extends PluginSettingTab {
         containerEl.empty();
 
         containerEl.createEl('h2', { text: 'Settings for My Plugin' });
-
-        // Topic Template Path Selector (allows files)
-        this.createFolderSelector(
-            containerEl,
-            'Topic Template Path',
-            'Path to the template for topics.',
-            '99_Organize/Templates/TopicTemplate.md',
-            'topicTemplatePath',
-            true
-        );
-
-        // Subtopic Template Path Selector (allows files)
-        this.createFolderSelector(
-            containerEl,
-            'Subtopic Template Path',
-            'Path to the template for subtopics.',
-            '99_Organize/Templates/SubtopicTemplate.md',
-            'subtopicTemplatePath',
-            true
-        );
-
-        // Topic Folder Selector
-        this.createFolderSelector(
-            containerEl,
-            'Topic Folder',
-            'Main folder for topics.',
-            '10_Topics',
-            'topicFolder',
-            false
-        );
-
-        // Subtopic Folder Name Selector
-        this.createFolderSelector(
-            containerEl,
-            'Subtopic Folder Name',
-            'Name of the subtopics folder.',
-            '00_Subtopics',
-            'subtopicFolderName',
-            false
-        );
-
         // Selector Ignore Folder
         this.createFolderSelector(
             containerEl,
@@ -741,55 +688,205 @@ class SettingTab extends PluginSettingTab {
             false
         );
 
-        this.createFolderSelector(
-            containerEl,
-            'How To Template Path',
-            'Path to the template for How To notes.',
-            '99_Organize/Templates/HowToTemplate.md',
-            'howToTemplatePath',
-            true
+        containerEl.createEl('h3', { text: 'Resource Types' });
+        new Setting(containerEl)
+        .setName('Manage Resource Types')
+        .setDesc('Add, edit, or remove resource types')
+        .addButton(button => button
+            .setButtonText('Add Resource Type')
+            .onClick(() => {
+                // Open a modal to add a new resource type
+                this.openResourceTypeModal();
+            }));
+        
+        Object.entries(this.plugin.settings.resourceTypes).forEach(([key, config]) => {
+            new Setting(containerEl)
+                .setName(config.name)
+                .addButton(editButton => 
+                    editButton
+                        .setButtonText('Edit')
+                        .onClick(() => this.openResourceTypeModal(key, config))
+                )
+                .addButton(deleteButton => 
+                    deleteButton
+                        .setButtonText('Delete')
+                        .onClick(async () => {
+                            await this.plugin.resourceManager.removeResourceType(key);
+                            this.display(); // Refresh settings
+                        }));
+        });
+
+    }
+
+    openResourceTypeModal(
+        existingKey?: string, 
+        existingConfig?: ResourceTypeSettings
+    ) {
+        new ResourceTypeModal(
+            this.app, 
+            this.plugin,
+            new TemplateService(this.app, this.plugin.settings),
+            new FileService(this.app),
+            new TagService(this.app),
+            existingKey, 
+            existingConfig
+        ).open();
+    }
+}
+
+class ResourceTypeModal extends Modal {
+    private nameInput: TextComponent;
+    private folderNameInput: TextComponent;
+    private templatePathInput: TextComponent;
+    private allowedParentsInput: TextComponent;
+    private requiresParentToggle: ToggleComponent;
+    private resourceManager: ResourceManager;
+    private existingKey?: string;
+
+    constructor(
+        app: App, 
+        private plugin: MyPlugin,
+        private templateService: TemplateService,
+        private fileService: FileService,
+        private tagService: TagService,
+        existingKey?: string, 
+        existingConfig?: ResourceTypeSettings
+    ) {
+        super(app);
+        this.existingKey = existingKey;
+        this.resourceManager = new ResourceManager(
+            plugin, 
+            templateService, 
+            fileService, 
+            tagService
         );
+    }
 
-        // How To Folder Name Selector
-        this.createFolderSelector(
-            containerEl,
-            'How To Folder Name',
-            'Name of the How To folder.',
-            '20_HowTos',
-            'howToFolderName',
-            false
-        );
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h2', { 
+            text: this.existingKey 
+                ? `Edit Resource Type: ${this.existingKey}` 
+                : 'Add New Resource Type' 
+        });
 
-        // // Default Setting (regular text input)
-        // const defaultSetting = new Setting(containerEl)
-        //     .setName('Default Setting')
-        //     .setDesc('Default setting for the plugin.')
-        //     .addText(text => {
-        //         text.inputEl.style.width = '100%';
-        //         return text
-        //             .setPlaceholder('default')
-        //             .setValue(this.plugin.settings.defaultSetting)
-        //             .onChange(async (value) => {
-        //                 this.plugin.settings.defaultSetting = value;
-        //                 await this.plugin.saveSettings();
-        //             });
-        //     });
+        // Name Input
+        new Setting(contentEl)
+            .setName('Resource Type Name')
+            .setDesc('A descriptive name for this resource type')
+            .addText(text => {
+                this.nameInput = text;
+                text.setValue(this.existingKey || '')
+                    .setPlaceholder('e.g., Topic, SubTopic, HowTo');
+            });
 
-        // // Style the default setting container
-        // defaultSetting.settingEl.style.display = 'grid';
-        // defaultSetting.settingEl.style.gridTemplateColumns = '1fr';
-        // defaultSetting.settingEl.style.gap = '6px';
+        // Folder Name Input
+        new Setting(contentEl)
+            .setName('Folder Name')
+            .setDesc('Folder where these resources will be stored')
+            .addText(text => {
+                this.folderNameInput = text;
+                text.setValue(this.existingKey 
+                    ? this.plugin.settings.resourceTypes[this.existingKey]?.folderName 
+                    : ''
+                )
+                .setPlaceholder('e.g., 10_Topics, 00_Subtopics');
+            });
 
-        // const defaultControlEl = defaultSetting.settingEl.querySelector('.setting-item-control');
-        // if (defaultControlEl instanceof HTMLElement) {
-        //     defaultControlEl.style.width = '100%';
-        //     defaultControlEl.style.display = 'flex';
-        //     defaultControlEl.style.justifyContent = 'flex-start';
-        //     defaultControlEl.style.minWidth = '300px';
-        // }
+        // Template Path Input
+        new Setting(contentEl)
+            .setName('Template Path')
+            .setDesc('Path to the template file for this resource type')
+            .addText(text => {
+                this.templatePathInput = text;
+                text.setValue(this.existingKey 
+                    ? this.plugin.settings.resourceTypes[this.existingKey]?.templatePath 
+                    : ''
+                )
+                .setPlaceholder('e.g., 99_Organize/Templates/TopicTemplate.md');
+            });
 
+        // Allowed Parents Input
+        new Setting(contentEl)
+            .setName('Allowed Parent Classes')
+            .setDesc('Comma-separated list of allowed parent resource types')
+            .addText(text => {
+                this.allowedParentsInput = text;
+                text.setValue(this.existingKey 
+                    ? this.plugin.settings.resourceTypes[this.existingKey]?.allowedParentClasses?.join(', ') 
+                    : ''
+                )
+                .setPlaceholder('e.g., Topic, SubTopic');
+            });
 
+        // Requires Parent Toggle
+        new Setting(contentEl)
+            .setName('Requires Parent')
+            .setDesc('Whether this resource type must have a parent')
+            .addToggle(toggle => {
+                this.requiresParentToggle = toggle;
+                toggle.setValue(
+                    this.existingKey 
+                        ? !!this.plugin.settings.resourceTypes[this.existingKey]?.requiresParent 
+                        : false
+                );
+            });
 
+        // Save Button
+        new Setting(contentEl)
+            .addButton(button => {
+                button.setButtonText('Save')
+                    .setCta()
+                    .onClick(() => this.saveResourceType());
+            });
+    }
+
+    private async saveResourceType() {
+        const name = this.nameInput.getValue().trim();
+        const folderName = this.folderNameInput.getValue().trim();
+        const templatePath = this.templatePathInput.getValue().trim();
+        const allowedParents = this.allowedParentsInput.getValue()
+            .split(',')
+            .map(p => p.trim())
+            .filter(p => p);
+        const requiresParent = this.requiresParentToggle.getValue();
+
+        // Validate inputs
+        if (!name || !folderName || !templatePath) {
+            new Notice('Please fill in all required fields');
+            return;
+        }
+
+        const newConfig: ResourceTypeSettings = {
+            name,
+            folderName,
+            templatePath,
+            allowedParentClasses: allowedParents,
+            requiresParent
+        };
+
+        const key = this.existingKey || name.replace(/\s+/g, '');
+
+        try {
+            // Use the resource manager to add/update the resource type
+            await this.resourceManager.addResourceType(key, newConfig);
+            new Notice(`Resource type ${key} ${this.existingKey ? 'updated' : 'added'}`);
+            this.close();
+
+            // Refresh settings tab
+            const settingsTab = this.plugin.settingTab;
+            if (settingsTab) {
+                settingsTab.display();
+            }
+        } catch (error) {
+            new Notice(`Error: ${error.message}`);
+        }
+    }
+
+    onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
     }
 }
 
