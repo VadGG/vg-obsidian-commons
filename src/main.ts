@@ -207,7 +207,7 @@ class ResourceManager extends BaseResourceCreator {
     }
 
 
-    getResourceTypes(): string[] {
+    public getResourceTypes(): string[] {
         return Array.from(this.resourceTypes.keys());
     }
 
@@ -298,8 +298,22 @@ class TemplateService {
 
     async updateFrontmatter(content: string, updates: Record<string, any>): Promise<string> {
         const { data: frontmatter, content: templateContent } = matter(content);
-        Object.assign(frontmatter, updates);
-        return matter.stringify(templateContent, frontmatter);
+        // Preserve existing tags if any
+        const existingTags = frontmatter.tags || [];
+        const existingTagsArray = Array.isArray(existingTags) ? existingTags : [existingTags];
+        
+        // Merge with inherited tags
+        const inheritedTags = updates.tags || [];
+        const mergedTags = [...new Set([...existingTagsArray, ...inheritedTags])];
+        
+        // Update frontmatter with merged tags
+        const updatedFrontmatter = {
+            ...frontmatter,
+            ...updates,
+            tags: mergedTags
+        };
+        
+        return matter.stringify(templateContent, updatedFrontmatter);
     }
 }
 
@@ -336,6 +350,7 @@ class TagService {
     constructor(private app: App) {}
 
     prefixTag(prefix: string, tag: string): string {
+        if (!prefix) return tag;
         if (tag.contains(prefix)) return tag;
         return `${prefix}/${tag}`;
     }
@@ -343,7 +358,7 @@ class TagService {
     async getInheritedTags(file: TFile): Promise<string[]> {
         const tags = new Set<string>();
         const cache = this.app.metadataCache.getFileCache(file);
-        const prefix = "inherited";
+        const prefix = "";
 
         // Add current file tags
         if (cache?.frontmatter?.tags) {
@@ -436,90 +451,12 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
     }
 
     async onChooseItem(action: string): Promise<void> {
-        const actionMap: Record<string, () => Promise<void>> = {
-            // 'New Topic': () => this.createTopic(),
-            // 'New Subtopic': () => this.createSubtopic()
-        };
+        const actionMap: Record<string, () => Promise<void>> = {};
 
         const handler = actionMap[action] || 
             (() => this.resourceManager.createResource(action.replace('New ', '')));
             
         await handler();
-    }
-
-
-    private async getSelectedTopic(): Promise<TopicData | null> {
-        const topicSelector = new TopicSelectorModal(this.plugin.app, this.plugin.settings, ['Topic']);
-        topicSelector.open();
-        return new Promise((resolve) => {
-            topicSelector.onChooseItem = async (file) => {
-                const frontmatter = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter;
-                if (frontmatter?.subfolder) {
-                    resolve({
-                        file,
-                        subfolder: frontmatter.subfolder,
-                        parentLink: `[[${file.path}|${file.basename}]]`,
-                    });
-                } else {
-                    new Notice("Selected topic doesn't have a subfolder defined!");
-                    resolve(null);
-                }
-            };
-        });
-    }
-
-    private async getUserInput(placeholder: string): Promise<string | null> {
-        const inputModal = new InputModal(this.plugin.app, placeholder);
-        inputModal.open();
-        return inputModal.getUserInput();
-    }
-
-    private async createTopic() {
-        const topicName = await this.getUserInput('Enter topic name');
-        if (!topicName) return;
-
-        const template = await this.templateService.loadTemplate(this.plugin.settings.topicTemplatePath);
-        if (!template) {
-            new Notice('Topic template not found!');
-            return;
-        }
-
-        const templateContent = await this.plugin.app.vault.read(template);
-        const filePath = `${this.plugin.settings.topicFolder}/${topicName}.md`;
-        const newFile = await this.fileService.createFile(filePath, templateContent);
-
-        await this.fileService.revealInExplorer(newFile);
-		await this.fileService.openFile(newFile);
-
-        new Notice(`Created new topic: ${topicName}`);
-    }
-
-    private async createSubtopic() {
-        const selectedTopic = await this.getSelectedTopic();
-        if (!selectedTopic) return;
-
-        const subtopicName = await this.getUserInput('Enter subtopic name');
-        if (!subtopicName) return;
-
-        const template = await this.templateService.loadTemplate(this.plugin.settings.subtopicTemplatePath);
-        if (!template) {
-            new Notice('Subtopic template not found!');
-            return;
-        }
-
-        const templateContent = await this.plugin.app.vault.read(template);
-        const inheritedTags = await this.tagService.getInheritedTags(selectedTopic.file);
-        const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
-            parent: selectedTopic.parentLink,
-            tags: inheritedTags,
-        });
-
-        const subtopicPath = `${selectedTopic.subfolder}/${this.plugin.settings.subtopicFolderName}/${subtopicName}.md`;
-        const newFile = await this.fileService.createFile(subtopicPath, updatedContent);
-		await this.fileService.revealInExplorer(newFile);
-		await this.fileService.openFile(newFile);
-
-        new Notice(`Created new subtopic: ${subtopicName}`);
     }
 
 }
@@ -536,10 +473,28 @@ class NoteService {
         const content = await this.app.vault.read(activeFile);
         const { data: frontmatter, content: fileContent } = matter(content);
         
+        // Get current tags
+        const currentTags = frontmatter.tags || [];
+        const currentTagsArray = Array.isArray(currentTags) ? currentTags : [currentTags];
+        
+        // Get old inherited tags to remove them
+        const oldParentMatch = frontmatter.parent?.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
+        const oldInheritedTags = oldParentMatch 
+            ? await this.tagService.getInheritedTags(
+                this.app.metadataCache.getFirstLinkpathDest(oldParentMatch[1], activeFile.path)
+              )
+            : [];
+        
+        // Remove old inherited tags, keeping custom ones
+        const customTags = currentTagsArray.filter(tag => !oldInheritedTags.includes(tag));
+        
+        // Get and add new inherited tags
+        const newInheritedTags = await this.tagService.getInheritedTags(newParent);
+        frontmatter.tags = [...new Set([...customTags, ...newInheritedTags])];
         frontmatter.parent = `[[${newParent.path}|${newParent.basename}]]`;
-        frontmatter.tags = await this.tagService.getInheritedTags(newParent);
+        
         const updatedContent = matter.stringify(fileContent, frontmatter);
-
+    
         if (frontmatter.Class === 'SubTopic') {
             const parentFrontmatter = this.app.metadataCache.getFileCache(newParent)?.frontmatter;
             if (parentFrontmatter?.subfolder) {
@@ -601,16 +556,31 @@ export default class MyPlugin extends Plugin {
                     new Notice('No active file');
                     return;
                 }
-
-                const topicSelector = new TopicSelectorModal(this.app, this.settings, ['Topic']);
+        
+                const frontmatter = this.app.metadataCache.getFileCache(activeFile)?.frontmatter;
+                const currentClass = frontmatter?.Class;
+                
+                const resourceManager = new ResourceManager(this, templateService, fileService, tagService);
+                const resourceType = resourceManager.resourceTypes.get(currentClass);
+                
+                if (!resourceType?.allowedParentClasses?.length) {
+                    new Notice('This note type cannot have a parent');
+                    return;
+                }
+        
+                const topicSelector = new TopicSelectorModal(
+                    this.app, 
+                    this.settings, 
+                    resourceType.allowedParentClasses
+                );
                 topicSelector.open();
-
+        
                 const newParent = await new Promise<TFile | null>((resolve) => {
                     topicSelector.onChooseItem = (file) => resolve(file);
                 });
-
+        
                 if (!newParent) return;
-
+        
                 await noteService.changeNoteParent(activeFile, newParent);
                 new Notice('Parent changed successfully');
             }
