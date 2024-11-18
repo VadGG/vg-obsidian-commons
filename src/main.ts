@@ -7,6 +7,7 @@ interface ResourceTypeSettings {
     templatePath: string;
     allowedParentClasses: string[];
     requiresParent?: boolean;
+    addNameAsTag?: boolean; 
 }
 
 interface MyPluginSettings {
@@ -23,20 +24,38 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
             folderName: '10_Topics',
             templatePath: '99_Organize/Templates/TopicTemplate.md',
             allowedParentClasses: [],
-            requiresParent: false
+            requiresParent: false,
+            addNameAsTag: false
+
         },
         'SubTopic': {
             name: 'SubTopic',
             folderName: '00_Subtopics',
             templatePath: '99_Organize/Templates/SubtopicTemplate.md',
             allowedParentClasses: ['Topic'],
-            requiresParent: true
+            requiresParent: true,
+            addNameAsTag: true
         },
         'HowTo': {
             name: 'How To',
             folderName: '20_HowTos',
             templatePath: '99_Organize/Templates/HowToTemplate.md',
-            allowedParentClasses: ['Topic', 'SubTopic']
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false
+        },
+        'Resource': {
+            name: 'Resouce',
+            folderName: '30_Resources',
+            templatePath: '99_Organize/Templates/ResourceTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false
+        },
+        'YoutubeResource': {
+            name: 'YoutubeResouce',
+            folderName: '40_YoutubeResources',
+            templatePath: '99_Organize/Templates/YoutubeResourceTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false
         }
     }
 };
@@ -138,10 +157,12 @@ class BaseResourceCreator {
     protected async createResourceFile(template: TFile, selected: {file: TFile, parentPath: string}, resourceName: string, resourceType: string) {
         const templateContent = await this.plugin.app.vault.read(template);
         const inheritedTags = await this.tagService.getInheritedTags(selected.file);
+        const config = this.plugin.settings.resourceTypes[resourceType];
+
         const updatedContent = await this.templateService.updateFrontmatter(templateContent, {
             parent: `[[${selected.file.path}|${selected.file.basename}]]`,
             tags: inheritedTags,
-        });
+        },config?.addNameAsTag ? resourceName : undefined);
     
         const resourcePath = `${selected.parentPath}/${resourceName}.md`;
         const newFile = await this.fileService.createFile(resourcePath, updatedContent);
@@ -166,13 +187,14 @@ class BaseResourceCreator {
 
         const templateContent = await this.app.vault.read(template);
         let updatedContent = templateContent;
+        const config = this.plugin.settings.resourceTypes[resourceType];
 
         if (parentFile) {
             const inheritedTags = await this.tagService.getInheritedTags(parentFile);
             updatedContent = await this.templateService.updateFrontmatter(templateContent, {
                 parent: `[[${parentFile.path}|${parentFile.basename}]]`,
                 tags: inheritedTags,
-            });
+            }, config?.addNameAsTag ? name : undefined);
         }
 
         const filePath = `${targetPath}/${name}.md`;
@@ -278,7 +300,7 @@ class TemplateService {
         return template instanceof TFile ? template : null;
     }
 
-    async updateFrontmatter(content: string, updates: Record<string, any>): Promise<string> {
+    async updateFrontmatter(content: string, updates: Record<string, any>,noteName?: string): Promise<string> {
         const { data: frontmatter, content: templateContent } = matter(content);
         // Preserve existing tags if any
         const existingTags = frontmatter.tags || [];
@@ -286,13 +308,20 @@ class TemplateService {
         
         // Merge with inherited tags
         const inheritedTags = updates.tags || [];
-        const mergedTags = [...new Set([...existingTagsArray, ...inheritedTags])];
         
+        // Format note name as tag if provided
+        const formattedTag = noteName ? noteName.toLowerCase().replace(/\s+/g, '_') : null;
+
+        // Add note name as tag if provided
+        const allTags = formattedTag 
+        ? [...new Set([...existingTagsArray, ...inheritedTags, formattedTag])]
+        : [...new Set([...existingTagsArray, ...inheritedTags])];
+
         // Update frontmatter with merged tags
         const updatedFrontmatter = {
             ...frontmatter,
             ...updates,
-            tags: mergedTags
+            tags: allTags
         };
         
         return matter.stringify(templateContent, updatedFrontmatter);
@@ -742,6 +771,7 @@ class ResourceTypeModal extends Modal {
     private requiresParentToggle: ToggleComponent;
     private resourceManager: ResourceManager;
     private existingKey?: string;
+    private addNameAsTagToggle: ToggleComponent;
 
     constructor(
         app: App, 
@@ -833,6 +863,18 @@ class ResourceTypeModal extends Modal {
                 );
             });
 
+        new Setting(contentEl)
+            .setName('Add Name as Tag')
+            .setDesc('Automatically add the resource name as a tag')
+            .addToggle(toggle => {
+                this.addNameAsTagToggle = toggle;
+                toggle.setValue(
+                    this.existingKey 
+                        ? !!this.plugin.settings.resourceTypes[this.existingKey]?.addNameAsTag 
+                        : false
+                );
+            });
+
         // Save Button
         new Setting(contentEl)
             .addButton(button => {
@@ -863,7 +905,8 @@ class ResourceTypeModal extends Modal {
             folderName,
             templatePath,
             allowedParentClasses: allowedParents,
-            requiresParent
+            requiresParent,
+            addNameAsTag: this.addNameAsTagToggle.getValue()
         };
 
         const key = this.existingKey || name.replace(/\s+/g, '');
