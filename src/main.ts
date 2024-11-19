@@ -55,46 +55,6 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
             addNameAsTag: false,
             moveOnParentChange: true
         },
-        'DocumentationResource': {
-            name: 'Resource - Documentation',
-            folderName: '35_Resources_Documentation',
-            templatePath: '99_Organize/Templates/20_Resources/DocumentationTemplate.md',
-            allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false,
-            moveOnParentChange: true
-        },
-        'GithubResource': {
-            name: 'Resource - Github',
-            folderName: '40_Resources_Github',
-            templatePath: '99_Organize/Templates/20_Resources/GithubTemplate.md',
-            allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false,
-            moveOnParentChange: true
-        },
-        'GithubIssueResource': {
-            name: 'Resource - Github Issue',
-            folderName: '45_GithubIssueResources',
-            templatePath: '99_Organize/Templates/20_Resources/GithubIssueTemplate.md',
-            allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false,
-            moveOnParentChange: true
-        },
-        'StackOverflowResource': {
-            name: 'Resource - Stack Overflow',
-            folderName: '50_Resources_StackOverflow',
-            templatePath: '99_Organize/Templates/20_Resources/StackOverflowTemplate.md',
-            allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false,
-            moveOnParentChange: true
-        },
-        'RedditResource': {
-            name: 'Resource - Reddit',
-            folderName: '45_RedditResources',
-            templatePath: '99_Organize/Templates/20_Resources/RedditTemplate.md',
-            allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false,
-            moveOnParentChange: true
-        },
         'BlogResource': {
             name: 'Resource - Blog',
             folderName: '35_Resources_Blog',
@@ -103,9 +63,50 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
             addNameAsTag: false,
             moveOnParentChange: true
         },
+        'DocumentationResource': {
+            name: 'Resource - Documentation',
+            folderName: '40_Resources_Documentation',
+            templatePath: '99_Organize/Templates/20_Resources/DocumentationTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'GithubResource': {
+            name: 'Resource - Github',
+            folderName: '45_Resources_Github',
+            templatePath: '99_Organize/Templates/20_Resources/GithubTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'GithubIssueResource': {
+            name: 'Resource - Github Issue',
+            folderName: '50_GithubIssueResources',
+            templatePath: '99_Organize/Templates/20_Resources/GithubIssueTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'StackOverflowResource': {
+            name: 'Resource - Stack Overflow',
+            folderName: '55_Resources_StackOverflow',
+            templatePath: '99_Organize/Templates/20_Resources/StackOverflowTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'RedditResource': {
+            name: 'Resource - Reddit',
+            folderName: '60_RedditResources',
+            templatePath: '99_Organize/Templates/20_Resources/RedditTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+
         'YoutubeResource': {
             name: 'Resource - Youtube',
-            folderName: '50_YoutubeResources',
+            folderName: '65_YoutubeResources',
             templatePath: '99_Organize/Templates/20_Resources/YoutubeTemplate.md',
             allowedParentClasses: ['Topic', 'SubTopic'],
             addNameAsTag: false,
