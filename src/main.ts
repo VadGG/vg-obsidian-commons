@@ -7,7 +7,8 @@ interface ResourceTypeSettings {
     templatePath: string;
     allowedParentClasses: string[];
     requiresParent?: boolean;
-    addNameAsTag?: boolean; 
+    addNameAsTag?: boolean;
+    moveOnParentChange?: boolean; // New option
 }
 
 interface MyPluginSettings {
@@ -25,7 +26,8 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
             templatePath: '99_Organize/Templates/TopicTemplate.md',
             allowedParentClasses: [],
             requiresParent: false,
-            addNameAsTag: false
+            addNameAsTag: false,
+            moveOnParentChange: false
 
         },
         'SubTopic': {
@@ -34,28 +36,80 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
             templatePath: '99_Organize/Templates/SubtopicTemplate.md',
             allowedParentClasses: ['Topic'],
             requiresParent: true,
-            addNameAsTag: true
+            addNameAsTag: true,
+            moveOnParentChange: true
         },
         'HowTo': {
             name: 'How To',
             folderName: '20_HowTos',
             templatePath: '99_Organize/Templates/HowToTemplate.md',
             allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false
+            addNameAsTag: false,
+            moveOnParentChange: true
         },
         'Resource': {
-            name: 'Resouce',
+            name: 'Resource',
             folderName: '30_Resources',
-            templatePath: '99_Organize/Templates/ResourceTemplate.md',
+            templatePath: '99_Organize/Templates/20_Resources/ResourceTemplate.md',
             allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'DocumentationResource': {
+            name: 'Resource - Documentation',
+            folderName: '35_Resources_Documentation',
+            templatePath: '99_Organize/Templates/20_Resources/DocumentationTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'GithubResource': {
+            name: 'Resource - Github',
+            folderName: '40_Resources_Github',
+            templatePath: '99_Organize/Templates/20_Resources/GithubTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'GithubIssueResource': {
+            name: 'Resource - Github Issue',
+            folderName: '45_GithubIssueResources',
+            templatePath: '99_Organize/Templates/20_Resources/GithubIssueTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'StackOverflowResource': {
+            name: 'Resource - Stack Overflow',
+            folderName: '50_Resources_StackOverflow',
+            templatePath: '99_Organize/Templates/20_Resources/StackOverflowTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'RedditResource': {
+            name: 'Resource - Reddit',
+            folderName: '45_RedditResources',
+            templatePath: '99_Organize/Templates/20_Resources/RedditTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
+        },
+        'BlogResource': {
+            name: 'Resource - Blog',
+            folderName: '35_Resources_Blog',
+            templatePath: '99_Organize/Templates/20_Resources/BlogTemplate.md',
+            allowedParentClasses: ['Topic', 'SubTopic'],
+            addNameAsTag: false,
+            moveOnParentChange: true
         },
         'YoutubeResource': {
-            name: 'YoutubeResouce',
-            folderName: '40_YoutubeResources',
-            templatePath: '99_Organize/Templates/YoutubeResourceTemplate.md',
+            name: 'Resource - Youtube',
+            folderName: '50_YoutubeResources',
+            templatePath: '99_Organize/Templates/20_Resources/YoutubeTemplate.md',
             allowedParentClasses: ['Topic', 'SubTopic'],
-            addNameAsTag: false
+            addNameAsTag: false,
+            moveOnParentChange: true
         }
     }
 };
@@ -221,6 +275,10 @@ class ResourceManager extends BaseResourceCreator {
 
     getResourceTypes(): string[] {
         return Object.keys(this.plugin.settings.resourceTypes);
+    }
+
+    getResources(): ResourceTypeSettings[] {
+        return Object.values(this.plugin.settings.resourceTypes);
     }
 
     getResourceConfig(resourceType: string): ResourceTypeSettings | undefined {
@@ -450,10 +508,9 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
     }
 
     getItems(): string[] {
-        // const baseActions = ['New Topic', 'New Subtopic'];
         const baseActions = [];
-
-        const resourceActions = Array.from(this.resourceManager.getResourceTypes()).map(type => `New ${type}`);
+        const resourceActions = Object.entries(this.plugin.settings.resourceTypes)
+            .map(([_, config]) => `New ${config.name}`);
         return [...baseActions, ...resourceActions];
     }
 
@@ -463,9 +520,13 @@ class ActionSelectorModal extends FuzzySuggestModal<string> {
 
     async onChooseItem(action: string): Promise<void> {
         const actionMap: Record<string, () => Promise<void>> = {};
-
+    
+        // Find the resource type key by matching the displayed name
+        const resourceTypeKey = Object.entries(this.plugin.settings.resourceTypes)
+            .find(([_, config]) => `New ${config.name}` === action)?.[0];
+    
         const handler = actionMap[action] || 
-            (() => this.resourceManager.createResource(action.replace('New ', '')));
+            (() => this.resourceManager.createResource(resourceTypeKey || ''));
             
         await handler();
     }
@@ -479,6 +540,27 @@ class NoteService {
         private fileService: FileService,
         private tagService: TagService
     ) {}
+
+    async findTopicWithSubfolder(file: TFile): Promise<string | null> {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const frontmatter = cache?.frontmatter;
+    
+        if (frontmatter?.Class === 'Topic' && frontmatter.subfolder) {
+            return frontmatter.subfolder;
+        }
+    
+        if (frontmatter?.parent) {
+            const parentMatch = frontmatter.parent.match(/\[\[(.*?)(?:\|.*?)?\]\]/);
+            if (parentMatch) {
+                const parentFile = this.app.metadataCache.getFirstLinkpathDest(parentMatch[1], file.path);
+                if (parentFile instanceof TFile) {
+                    return this.findTopicWithSubfolder(parentFile);
+                }
+            }
+        }
+    
+        return null;
+    }
 
     async changeNoteParent(activeFile: TFile, newParent: TFile): Promise<void> {
         const content = await this.app.vault.read(activeFile);
@@ -506,19 +588,51 @@ class NoteService {
         
         const updatedContent = matter.stringify(fileContent, frontmatter);
     
-        if (frontmatter.Class === 'SubTopic') {
-            const parentFrontmatter = this.app.metadataCache.getFileCache(newParent)?.frontmatter;
-            if (parentFrontmatter?.subfolder) {
-                const newPath = `${parentFrontmatter.subfolder}/${this.settings.subtopicFolderName}/${activeFile.basename}.md`;
-                await this.app.fileManager.renameFile(activeFile, newPath);
-                const movedFile = this.app.vault.getAbstractFileByPath(newPath);
-                if (movedFile instanceof TFile) {
-                    await this.app.vault.modify(movedFile, updatedContent);
+        const resourceType = this.settings.resourceTypes[frontmatter.Class];
+        if (resourceType?.moveOnParentChange) {
+            const topicSubfolder = await this.findTopicWithSubfolder(newParent);
+            if (topicSubfolder) {
+                const newParentCache = this.app.metadataCache.getFileCache(newParent);
+                const newParentFrontmatter = newParentCache?.frontmatter;
+                
+                // Build the path including the subtopic folder
+                const subtopicPath = newParentFrontmatter?.Class === 'SubTopic' 
+                    ? `/${newParent.basename}` 
+                    : '';
+                const newPath = `${topicSubfolder}/${resourceType.folderName}${subtopicPath}/${activeFile.basename}.md`;
+                
+                if (newPath !== activeFile.path) {
+                    const newDir = `${topicSubfolder}/${resourceType.folderName}${subtopicPath}`;
+                    if (!(await this.app.vault.adapter.exists(newDir))) {
+                        await this.app.vault.createFolder(newDir);
+                    }
+                    
+                    await this.app.fileManager.renameFile(activeFile, newPath);
+                    const movedFile = this.app.vault.getAbstractFileByPath(newPath);
+                    if (movedFile instanceof TFile) {
+                        await this.app.vault.modify(movedFile, updatedContent);
+                        await this.fileService.revealInExplorer(movedFile);
+                    }
+                    return;
                 }
             }
-        } else {
-            await this.app.vault.modify(activeFile, updatedContent);
         }
+
+        await this.app.vault.modify(activeFile, updatedContent);
+
+        // if (frontmatter.Class === 'SubTopic') {
+        //     const parentFrontmatter = this.app.metadataCache.getFileCache(newParent)?.frontmatter;
+        //     if (parentFrontmatter?.subfolder) {
+        //         const newPath = `${parentFrontmatter.subfolder}/${this.settings.subtopicFolderName}/${activeFile.basename}.md`;
+        //         await this.app.fileManager.renameFile(activeFile, newPath);
+        //         const movedFile = this.app.vault.getAbstractFileByPath(newPath);
+        //         if (movedFile instanceof TFile) {
+        //             await this.app.vault.modify(movedFile, updatedContent);
+        //         }
+        //     }
+        // } else {
+        //     await this.app.vault.modify(activeFile, updatedContent);
+        // }
     }
 }
 
@@ -874,6 +988,19 @@ class ResourceTypeModal extends Modal {
                         : false
                 );
             });
+        
+        // Move on Parent Change Toggle
+        new Setting(contentEl)
+        .setName('Move on Parent Change')
+        .setDesc('Move file to new location when parent changes')
+        .addToggle(toggle => {
+            this.moveOnParentChangeToggle = toggle;
+            toggle.setValue(
+                this.existingKey 
+                    ? !!this.plugin.settings.resourceTypes[this.existingKey]?.moveOnParentChange 
+                    : false
+            );
+        });
 
         // Save Button
         new Setting(contentEl)
